@@ -4,6 +4,9 @@ import { fetchPublicUrl, BROWSER_UA } from "@/lib/safe-fetch";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const FALLBACK_CACHE = "public, max-age=86400, stale-while-revalidate=604800";
+const EMPTY_IMAGE_HEADERS = {
+  "Cache-Control": "public, max-age=3600",
+};
 
 function getClientIp(request: Request): string | null {
   const ip =
@@ -42,24 +45,22 @@ export const Route = createFileRoute("/api/og/image")({
             },
             signal: AbortSignal.timeout(8000),
           }));
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Fetch failed";
-          const status = /private hosts|allowed/i.test(message) ? 400 : 502;
-          return Response.json({ error: message }, { status });
+        } catch {
+          return new Response(null, { status: 204, headers: EMPTY_IMAGE_HEADERS });
         }
 
         if (!upstream.ok || !upstream.body) {
-          return Response.json({ error: "Upstream rejected" }, { status: 502 });
+          return new Response(null, { status: 204, headers: EMPTY_IMAGE_HEADERS });
         }
 
         const contentType = upstream.headers.get("content-type") || "";
         if (!contentType.toLowerCase().startsWith("image/")) {
-          return Response.json({ error: "Not an image" }, { status: 415 });
+          return new Response(null, { status: 204, headers: EMPTY_IMAGE_HEADERS });
         }
 
         const declaredLength = Number(upstream.headers.get("content-length") || "0");
         if (declaredLength && declaredLength > MAX_IMAGE_BYTES) {
-          return Response.json({ error: "Image too large" }, { status: 413 });
+          return new Response(null, { status: 204, headers: EMPTY_IMAGE_HEADERS });
         }
 
         const limited = new ReadableStream<Uint8Array>({

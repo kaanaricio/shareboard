@@ -23,6 +23,7 @@ export function YouTubeEmbed({ url }: { url: string }) {
         title="YouTube video"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
         allowFullScreen
+        referrerPolicy="origin"
         className="absolute inset-0 h-full w-full"
         loading="lazy"
       />
