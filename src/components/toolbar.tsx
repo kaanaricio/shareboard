@@ -5,6 +5,7 @@ import { isPlausibleOpenaiApiKey, sanitizeOpenaiApiKeyInput } from "@/lib/openai
 import { setApiKey, setName, setProfile, getName, getApiKey, getProfile } from "@/lib/store";
 import {
   Check,
+  Clock3,
   ImagePlus,
   Type,
   Sparkles,
@@ -20,6 +21,7 @@ import { InstagramIcon } from "@/components/ui/svgs/instagramIcon";
 import { Linkedin } from "@/components/ui/svgs/linkedin";
 import { PageNav } from "@/components/page-nav";
 import { ActionFan, type ActionFanItem } from "@/components/action-fan";
+import type { BoardHistoryEntry } from "@/lib/store";
 
 export function Toolbar({
   hasItems,
@@ -30,6 +32,7 @@ export function Toolbar({
   locked,
   pageCount,
   activePage,
+  history,
   onChangePage,
   onAddPage,
   onAddImage,
@@ -37,6 +40,8 @@ export function Toolbar({
   onGenerate,
   onShare,
   onDeleteLastShare,
+  onOpenHistoryEntry,
+  onRemoveHistoryEntry,
 }: {
   hasItems: boolean;
   hasApiKey: boolean;
@@ -46,6 +51,7 @@ export function Toolbar({
   locked?: boolean;
   pageCount: number;
   activePage: number;
+  history: BoardHistoryEntry[];
   onChangePage: (next: number) => void;
   onAddPage: () => void;
   onAddImage: (file: File) => void | Promise<boolean>;
@@ -53,8 +59,11 @@ export function Toolbar({
   onGenerate: () => void;
   onShare: () => void;
   onDeleteLastShare: () => void;
+  onOpenHistoryEntry: (entry: BoardHistoryEntry) => void;
+  onRemoveHistoryEntry: (id: string) => void;
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsName, setSettingsName] = useState("");
   const [settingsKey, setSettingsKey] = useState("");
   const [settingsX, setSettingsX] = useState("");
@@ -142,32 +151,29 @@ export function Toolbar({
       >
         {/* Left: settings */}
         <div className="board-toolbar-left">
-        <Popover open={settingsOpen} onOpenChange={handleSettingsOpenChange}>
-          <PopoverTrigger
-            onClick={() => {
-              if (settingsOpen) setSettingsOpen(false);
-            }}
-            className="board-toolbar-icon"
-            aria-label="Settings"
-            title="Settings"
-          >
-            <Settings className="h-4 w-4 text-foreground/60" />
-          </PopoverTrigger>
-          <PopoverContent
-            side="top"
-            sideOffset={12}
-            align="start"
-            className="board-popover board-popover--settings"
-          >
-            <div className="setup-dialog-tile">
-              <span className="setup-dialog-tile-label">Display name</span>
-              <input
-                placeholder="Your name"
-                value={settingsName}
-                onChange={(e) => setSettingsName(e.target.value)}
-                className="setup-dialog-tile-input"
-              />
-            </div>
+          <Popover open={settingsOpen} onOpenChange={handleSettingsOpenChange}>
+            <PopoverTrigger
+              className="board-toolbar-icon"
+              aria-label="Settings"
+              title="Settings"
+            >
+              <Settings className="h-4 w-4 text-foreground/60" />
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              sideOffset={12}
+              align="start"
+              className="board-popover board-popover--settings"
+            >
+              <div className="setup-dialog-tile">
+                <span className="setup-dialog-tile-label">Display name</span>
+                <input
+                  placeholder="Your name"
+                  value={settingsName}
+                  onChange={(e) => setSettingsName(e.target.value)}
+                  className="setup-dialog-tile-input"
+                />
+              </div>
 
             <div className="setup-dialog-tile">
               <span className="setup-dialog-tile-label">
@@ -241,23 +247,70 @@ export function Toolbar({
               Save
             </Button>
 
-            {hasLastSharedBoard && (
-              <button
-                type="button"
-                onClick={onDeleteLastShare}
-                disabled={isDeletingShare}
-                className="board-popover-link"
-              >
-                {isDeletingShare ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {hasLastSharedBoard && (
+                <button
+                  type="button"
+                  onClick={onDeleteLastShare}
+                  disabled={isDeletingShare}
+                  className="board-popover-link"
+                >
+                  {isDeletingShare ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                  <span>Delete last shared board</span>
+                </button>
+              )}
+            </PopoverContent>
+          </Popover>
+
+          <Popover open={historyOpen} onOpenChange={setHistoryOpen}>
+            <PopoverTrigger
+              className="board-toolbar-icon"
+              aria-label="Recent boards"
+              title="Recent boards"
+            >
+              <Clock3 className="h-4 w-4 text-foreground/60" />
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              sideOffset={12}
+              align="start"
+              className="board-popover board-popover--history"
+            >
+              <div className="board-popover-section board-history">
+                {history.length === 0 ? (
+                  <div className="board-history-empty">Recent shares appear here.</div>
                 ) : (
-                  <Trash2 className="h-3.5 w-3.5" />
+                  history.map((entry) => (
+                    <div className="board-history-row" key={entry.id}>
+                      <button
+                        type="button"
+                        className="board-history-main"
+                        onClick={() => {
+                          onOpenHistoryEntry(entry);
+                          setHistoryOpen(false);
+                        }}
+                      >
+                        <span className="board-history-title">{entry.title}</span>
+                        <span className="board-history-subtitle">{entry.subtitle}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="board-history-remove"
+                        aria-label={`Remove ${entry.title} from history`}
+                        title="Remove"
+                        onClick={() => onRemoveHistoryEntry(entry.id)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))
                 )}
-                <span>Delete last shared board</span>
-              </button>
-            )}
-          </PopoverContent>
-        </Popover>
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
 
         {/* Center: Plus button (pill) with radial fan menu */}

@@ -18,14 +18,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Check, Loader2, Share2 } from "lucide-react";
 import {
+  getBoardHistory,
   clearLastSharedBoard,
   getLastSharedBoard,
   getApiKey,
   getName,
   getProfile,
   isSetup,
+  removeBoardHistoryEntry,
+  saveBoardHistory,
   saveLastSharedBoard,
+  type BoardHistoryEntry,
 } from "@/lib/store";
 import { detectPlatform, isValidUrl } from "@/lib/platforms";
 import { mergeLayout } from "@/components/ui/auto-canvas";
@@ -112,6 +117,41 @@ function createSvgFile(svgSource: string) {
   return new File([withXmlns], `shareboard-${Date.now()}.svg`, { type: "image/svg+xml" });
 }
 
+function getBoardTitle(pages: SharePayload["pages"]) {
+  for (const page of pages) {
+    for (const item of page.items) {
+      if (item.type === "note" && item.text.trim()) {
+        return item.text.trim().replace(/\s+/g, " ").slice(0, 42);
+      }
+      if (item.type === "url") {
+        try {
+          return new URL(item.url).hostname.replace(/^www\./, "");
+        } catch {
+          return item.url.slice(0, 42);
+        }
+      }
+      if (item.type === "image") return item.caption?.trim() || "Image board";
+    }
+  }
+  return "Untitled board";
+}
+
+function getHistorySubtitle(kind: BoardHistoryEntry["kind"], pageCount: number, itemCount: number) {
+  const itemLabel = itemCount === 1 ? "item" : "items";
+  const pageLabel = pageCount === 1 ? "page" : "pages";
+  return `${kind === "tiny" ? "Stored in link" : "Encrypted share"} · ${itemCount} ${itemLabel} · ${pageCount} ${pageLabel}`;
+}
+
+function pagesFromHistoryCanvas(canvas: SharedCanvasData): BoardPage[] {
+  return canvas.pages.length
+    ? canvas.pages.map((page) => ({
+        id: page.id || nanoid(8),
+        items: page.items.filter((item) => item.type !== "board_summary"),
+        layouts: page.layouts ?? { lg: [], sm: [] },
+      }))
+    : [emptyPage()];
+}
+
 function findSharedUrl(types: readonly string[], get: (type: string) => string) {
   const uriList = get("text/uri-list")
     .split("\n")
@@ -143,10 +183,13 @@ export function Home() {
   const [isDeletingShare, setIsDeletingShare] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [hasLastSharedBoard, setHasLastSharedBoard] = useState(false);
+  const [history, setHistory] = useState<BoardHistoryEntry[]>([]);
+  const [shareState, setShareState] = useState<"idle" | "sharing" | "copied">("idle");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deleteDialogIds, setDeleteDialogIds] = useState<string[] | null>(null);
   const [maxRows, setMaxRows] = useState(estimateMaxRowsFromViewport);
   const [settingsEpoch, setSettingsEpoch] = useState(0);
+  const shareResetTimer = useRef<number | null>(null);
   // Keep latest pages in a ref so the unmount blob-URL cleanup can walk them
   // without being a dep of the mount effect. Assignment during render is safe —
   // it doesn't trigger renders.
@@ -193,12 +236,14 @@ export function Home() {
     setMounted(true);
     setNeedsSetup(!isSetup());
     setHasLastSharedBoard(!!getLastSharedBoard());
+    setHistory(getBoardHistory());
 
     const onSettings = () => setSettingsEpoch((e) => e + 1);
     window.addEventListener("shareboard-settings", onSettings);
 
     return () => {
       window.removeEventListener("shareboard-settings", onSettings);
+      if (shareResetTimer.current !== null) window.clearTimeout(shareResetTimer.current);
       for (const page of pagesRef.current) {
         for (const item of page.items) {
           if (isDraftImageItem(item)) URL.revokeObjectURL(item.previewUrl);
@@ -253,8 +298,16 @@ export function Home() {
         const active = next[activePage] ?? emptyPage();
         const tentativeItems = [...active.items, item];
         const tentative = packPageLayouts(tentativeItems, active.layouts, maxRows);
-        const landed = tentative.lg.find((l) => l.i === item.id);
-        const fits = !landed || landed.y + landed.h <= maxRows;
+        // Check the whole layout, not just the newly-added tile: the packer may
+        // re-pack existing tiles on overflow, and aspect-locked tiles keep their
+        // natural height at render regardless of what we store — an image, tweet,
+        // or YouTube pasted onto a full page would otherwise silently overflow
+        // the canvas instead of spilling onto a new page.
+        const tentativeBottom = tentative.lg.reduce(
+          (m, l) => Math.max(m, l.y + l.h),
+          0,
+        );
+        const fits = tentativeBottom <= maxRows;
         const activeIsEmpty = active.items.length === 0;
 
         if (fits || activeIsEmpty) {
@@ -474,7 +527,18 @@ export function Home() {
     }
   }, [pages, patchPage, maxRows, setActivePage]);
 
+  const markShareCopied = useCallback(() => {
+    setShareState("copied");
+    if (shareResetTimer.current !== null) window.clearTimeout(shareResetTimer.current);
+    shareResetTimer.current = window.setTimeout(() => {
+      setShareState("idle");
+      shareResetTimer.current = null;
+    }, 1800);
+  }, []);
+
   const share = useCallback(async () => {
+    if (shareState === "sharing") return;
+    setShareState("sharing");
     try {
       const form = new FormData();
       const payload: SharePayload = {
@@ -502,6 +566,8 @@ export function Home() {
       };
 
       form.set("payload", JSON.stringify(payload));
+      const itemCount = payload.pages.reduce((n, page) => n + page.items.length, 0);
+      const title = getBoardTitle(payload.pages);
 
       const hasImages = pages.some((page) => page.items.some((item) => item.type === "image"));
       if (!hasImages) {
@@ -524,6 +590,19 @@ export function Home() {
           await navigator.clipboard.writeText(tinyUrl);
           clearLastSharedBoard();
           setHasLastSharedBoard(false);
+          saveBoardHistory({
+            id: `tiny:${Date.now()}`,
+            kind: "tiny",
+            title,
+            subtitle: getHistorySubtitle("tiny", tinyCanvas.pages.length, itemCount),
+            shareUrl: tinyUrl,
+            createdAt: tinyCanvas.createdAt,
+            itemCount,
+            pageCount: tinyCanvas.pages.length,
+            canvas: tinyCanvas,
+          });
+          setHistory(getBoardHistory());
+          markShareCopied();
           notify.success("Link copied to clipboard");
           return;
         }
@@ -541,6 +620,7 @@ export function Home() {
       const res = await fetch("/api/share", { method: "POST", body: form });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: "Failed to share" }));
+        setShareState("idle");
         notify.error(err.error || "Failed to share");
         return;
       }
@@ -549,11 +629,24 @@ export function Home() {
       await navigator.clipboard.writeText(shareUrl);
       saveLastSharedBoard({ id, deleteToken, shareUrl });
       setHasLastSharedBoard(true);
+      saveBoardHistory({
+        id,
+        kind: "stored",
+        title,
+        subtitle: getHistorySubtitle("stored", payload.pages.length, itemCount),
+        shareUrl,
+        createdAt: new Date().toISOString(),
+        itemCount,
+        pageCount: payload.pages.length,
+      });
+      setHistory(getBoardHistory());
+      markShareCopied();
       notify.success("Link copied to clipboard");
     } catch {
+      setShareState("idle");
       notify.error("Failed to share");
     }
-  }, [pages, generation]);
+  }, [pages, generation, shareState, markShareCopied]);
 
   const deleteLastShare = useCallback(async () => {
     const lastShare = getLastSharedBoard();
@@ -583,6 +676,30 @@ export function Home() {
     } finally {
       setIsDeletingShare(false);
     }
+  }, []);
+
+  const openHistoryEntry = useCallback(
+    (entry: BoardHistoryEntry) => {
+      if (entry.canvas && Array.isArray(entry.canvas.pages)) {
+        setPages(pagesFromHistoryCanvas(entry.canvas));
+        setGeneration(entry.canvas.generation ?? null);
+        setSelectedIds([]);
+        navigate({ search: {}, replace: false });
+        notify.success("Board restored");
+        return;
+      }
+      if (entry.kind === "tiny") {
+        notify.error("This local history entry cannot be restored");
+        return;
+      }
+      window.open(entry.shareUrl, "_blank", "noopener,noreferrer");
+    },
+    [navigate]
+  );
+
+  const removeHistoryEntry = useCallback((id: string) => {
+    removeBoardHistoryEntry(id);
+    setHistory(getBoardHistory());
   }, []);
 
   const handleDropData = useCallback(
@@ -813,6 +930,27 @@ export function Home() {
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
       <MobileEditorBanner />
+
+      <div className="board-notch" data-locked={needsSetup || undefined}>
+        <button
+          type="button"
+          className="board-notch-action"
+          onClick={share}
+          disabled={!hasItems || shareState === "sharing"}
+          aria-label="Share board"
+          title="Share board"
+        >
+          {shareState === "sharing" ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : shareState === "copied" ? (
+            <Check className="h-3.5 w-3.5" />
+          ) : (
+            <Share2 className="h-3.5 w-3.5" />
+          )}
+          <span>{shareState === "copied" ? "Copied" : "Share"}</span>
+        </button>
+      </div>
+
       <BoardCarousel
         pages={pages}
         activeIndex={activePage}
@@ -845,6 +983,7 @@ export function Home() {
         locked={needsSetup}
         pageCount={pages.length}
         activePage={activePage}
+        history={history}
         onChangePage={setActivePage}
         onAddPage={addPage}
         onAddImage={addImage}
@@ -852,6 +991,8 @@ export function Home() {
         onGenerate={generate}
         onShare={share}
         onDeleteLastShare={deleteLastShare}
+        onOpenHistoryEntry={openHistoryEntry}
+        onRemoveHistoryEntry={removeHistoryEntry}
       />
 
       {needsSetup && <SetupCards onComplete={() => setNeedsSetup(false)} />}
