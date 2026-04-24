@@ -11,11 +11,11 @@ bun install
 bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), set a display name and API key in the dialog, then use the app.
+Open [http://localhost:3000](http://localhost:3000), set a display name, optionally add an API key, then use the app.
 
 ## Env (optional)
 
-Sharing boards to a public URL uses Cloudflare R2. Without these, the rest of the app still works.
+Media-backed shared boards use Cloudflare R2. Tiny text/URL-only boards can share as compressed URL fragments and do not require storage. Without R2 env vars, the editor and tiny shares still work.
 
 Copy `.env.example` → `.env` and fill in values:
 
@@ -25,11 +25,12 @@ Copy `.env.example` → `.env` and fill in values:
 
 ## Share Architecture
 
-- Shared boards are stored in Cloudflare R2 as one immutable JSON manifest at `canvases/{id}.json`.
-- Shared images are uploaded as separate R2 objects under `images/{id}/{itemId}` and referenced by URL from the manifest.
+- Tiny text/URL-only boards are encoded into `/s#b=...` links using browser compression. The server stores nothing for those links.
+- Media-backed boards are stored in Cloudflare R2 as one immutable JSON manifest at `canvases/{id}.json`.
+- Shared images are optimized in the browser, uploaded as separate R2 objects under `images/{id}/{itemId}`, and referenced by URL from the manifest.
 - The editor never persists local blob URLs or `File` objects.
 - Non-image files are intentionally rejected. This is a shareboard, not general file storage.
-- Each share returns a one-time delete token, stored locally in the browser for future deletion flows.
+- Stored R2 shares return a one-time delete token, stored locally in the browser for future deletion flows.
 
 ## Stack
 

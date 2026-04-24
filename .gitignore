@@ -29,7 +29,10 @@ src/routeTree.gen.ts
 .vscode/
 .idea/
 
-# local notes
+# internal planning / agent docs
+AGENTS.md
+CLAUDE.md
+MISSION.md
 simplify-skill.md
 docs/
 
@@ -43,6 +46,16 @@ bun-debug.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
+.dev.vars*
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+credentials*.json
+secrets*.json
+service-account*.json
+.npmrc
 
 # vercel
 .vercel
