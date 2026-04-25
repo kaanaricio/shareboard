@@ -64,7 +64,7 @@ type EncryptedSharePayload = Omit<EncryptedCanvasEnvelope, "deleteTokenHash">;
 
 const MAX_SOCIAL_URL = 2048;
 const MANIFEST_CACHE_CONTROL = "public, max-age=3600, stale-while-revalidate=86400";
-const LOCKED_PIN_ITERATIONS = 350_000;
+const LOCKED_PIN_ITERATIONS = 100_000;
 const pbkdf2Async = promisify(pbkdf2);
 
 function createShareId() {
