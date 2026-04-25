@@ -359,6 +359,11 @@ export function Home() {
 
       const landedIndex = addItemWithSpill(item);
 
+      // YouTube/Twitter render via dedicated embeds, so OG metadata is unused.
+      // Other sites that block CF Workers (e.g. LinkedIn) gracefully fall back
+      // to the icon + hostname card.
+      if (platform === "youtube" || platform === "twitter") return;
+
       try {
         const res = await fetch(`/api/og?url=${encodeURIComponent(rawUrl)}`);
         if (res.ok) {

@@ -120,7 +120,7 @@ export const Route = createFileRoute("/api/og")({
           });
 
           if (!res.ok) {
-            return Response.json({ error: "Failed to fetch" }, { status: 502 });
+            return Response.json({ error: "Failed to fetch", upstream: res.status }, { status: 502 });
           }
 
           const contentType = res.headers.get("content-type") || "";
