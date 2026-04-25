@@ -15,7 +15,7 @@ Open [http://localhost:3000](http://localhost:3000), set a display name, optiona
 
 `npm start` also runs the dev server with hot reload. Use `bun run build && bun run preview` only when you want to serve the latest production build output.
 
-## Env (optional)
+## Configuration
 
 Media-backed shared boards use Cloudflare R2. Tiny text/URL-only boards can share as compressed URL fragments and do not require storage. Without R2 env vars, the editor and tiny shares still work.
 
@@ -25,7 +25,9 @@ Copy `.env.example` → `.env` and fill in values:
 - `CLOUDFLARE_API_TOKEN`
 - `R2_PUBLIC_URL`
 
-On Cloudflare Workers, the app prefers the `SHAREBOARD_R2` bucket binding in `wrangler.jsonc`; the account ID/API token path is only a fallback for local or legacy deployments. `R2_PUBLIC_URL` is still required so shared image URLs can point directly at R2 instead of proxying through the app.
+On Cloudflare Workers, the app prefers the `SHAREBOARD_R2` bucket binding in `wrangler.jsonc`; the account ID/API token path is only a fallback for local or legacy deployments. `R2_PUBLIC_URL` is required as a Worker secret so shared image URLs can point directly at R2 instead of proxying through the app.
+
+Do not commit account-specific URLs, tokens, bucket endpoints, API keys, or internal planning docs. This repository is intended to be public and self-hostable.
 
 ## Deploy on Cloudflare
 
@@ -35,7 +37,14 @@ Create the bucket once:
 bunx wrangler r2 bucket create shareboard
 ```
 
-Set `R2_PUBLIC_URL` as a Worker secret or variable, then deploy:
+Enable public access for the bucket and copy the resulting `r2.dev` URL:
+
+```bash
+bunx wrangler r2 bucket dev-url enable shareboard
+bunx wrangler r2 bucket dev-url get shareboard
+```
+
+Set that URL as a Worker secret, then deploy:
 
 ```bash
 bunx wrangler secret put R2_PUBLIC_URL
@@ -50,6 +59,22 @@ bunx wrangler r2 bucket lifecycle add shareboard expire-images-30d images/ --exp
 ```
 
 Use a shorter expiry for public demos. Stored board manifests are cacheable for one hour; delete links still remove the source objects, but recently viewed public copies may linger until cache expiry.
+
+The committed `wrangler.jsonc` deliberately contains only reusable infrastructure shape: Worker name, static assets, and the `SHAREBOARD_R2` binding. Each operator supplies their own bucket endpoint through Cloudflare secrets.
+
+### Custom Domain
+
+The default `workers.dev` URL is fine for development and demos. For a polished public launch, attach a Cloudflare custom domain after the domain is on Cloudflare:
+
+```jsonc
+{
+  "routes": [
+    { "pattern": "clip.example.com", "custom_domain": true }
+  ]
+}
+```
+
+Cloudflare creates DNS records and certificates for Worker custom domains. Keep domain-specific routes out of forks unless they belong to that deployment.
 
 ## Share Architecture
 
