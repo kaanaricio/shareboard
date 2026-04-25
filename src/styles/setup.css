@@ -117,19 +117,17 @@
   box-shadow: none;
 }
 
-.setup-dialog-tile-input--masked {
+/*
+ * Mask only when the input has real content AND isn't focused. Without
+ * `:not(:placeholder-shown)` the placeholder ("sk-...") inherits the disc
+ * font + 0.12em letter-spacing, so it visibly differed from the focused
+ * state.
+ */
+.setup-dialog-tile-input--masked:not(:placeholder-shown):not(:focus):not(:focus-visible) {
   -webkit-text-security: disc;
   text-security: disc;
   font-family: text-security-disc, var(--font-sans, inherit);
   letter-spacing: 0.12em;
-}
-
-.setup-dialog-tile-input--masked:focus,
-.setup-dialog-tile-input--masked:focus-visible {
-  -webkit-text-security: none;
-  text-security: none;
-  letter-spacing: normal;
-  font-family: var(--font-sans, inherit);
 }
 
 /* Checkmark is out of flow so row height = input only (avoids flex stretching the card) */

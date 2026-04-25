@@ -27,11 +27,26 @@
 .react-grid-item.react-grid-placeholder {
   background: transparent !important;
   border: 1px dashed rgba(0, 0, 0, 0.18) !important;
-  border-radius: 24px !important;
+  border-radius: 12px !important;
   opacity: 1 !important;
   box-shadow: none !important;
   backdrop-filter: none !important;
   transition: transform 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/*
+ * During RESIZE the placeholder is the primary signal — it shows the snap
+ * target the tile will commit to. When the user is shrinking, the snap target
+ * sits *inside* the live tile's footprint, so without this it disappears
+ * behind the tile content (the resizing tile is z-index: 100). Lift the
+ * placeholder above the tile and add a faint fill so the snap region reads
+ * clearly whether it's outside the tile (growing) or inside (shrinking).
+ * Drag stays unchanged — the quieter ghost is the right call there.
+ */
+body.grid-resizing .react-grid-item.react-grid-placeholder {
+  z-index: 101 !important;
+  background: rgba(0, 0, 0, 0.06) !important;
+  border-color: rgba(0, 0, 0, 0.32) !important;
 }
 
 /* Prevent text selection during drag/resize */

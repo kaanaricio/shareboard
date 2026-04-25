@@ -104,6 +104,74 @@
   background-color: rgba(0, 0, 0, 0.08);
 }
 
+.youtube-poster {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+.youtube-poster-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.youtube-poster-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.75rem;
+  height: 3.75rem;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.72);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.22),
+    0 12px 30px -12px rgba(0, 0, 0, 0.75);
+  transition: transform 0.14s ease, background-color 0.14s ease;
+}
+
+.youtube-poster-play:hover {
+  transform: translate(-50%, -50%) scale(1.05);
+  background: rgba(0, 0, 0, 0.82);
+}
+
+.youtube-frame-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+.youtube-open-link {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  height: 1.875rem;
+  padding: 0 0.7rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 500;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
 /* ─── Bottom toolbar — page nav + actions ───────────────────────────── */
 
 .board-toolbar {
@@ -288,6 +356,23 @@
     0 2px 6px -3px rgba(0, 0, 0, 0.08);
 }
 
+/* ─── Manual toolbar menu (anchors popup above its trigger) ──────────── */
+/* The popup uses motion/react (matches ActionFan's spring), so timing lives
+ * in toolbar.tsx — only positioning is handled here. */
+
+.board-toolbar-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.board-toolbar-menu-popup {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  z-index: 50;
+  transform-origin: bottom left;
+}
+
 /* ─── Popovers — transparent shell, inner cards stand on their own ────── */
 
 .board-popover {
@@ -310,6 +395,15 @@
 
 .board-popover--history {
   width: min(100vw - 2rem, 19rem);
+}
+
+.board-popover--history-empty {
+  width: auto;
+}
+
+.board-popover--history-empty .board-history-empty {
+  padding: 0.5rem 0.75rem;
+  white-space: nowrap;
 }
 
 .board-popover-section {
@@ -456,6 +550,140 @@
 .board-history-remove:hover {
   background-color: rgba(0, 0, 0, 0.06);
   color: var(--destructive);
+}
+
+/* ─── Locked board PIN entry ────────────────────────────────────────── */
+
+.locked-share-screen {
+  display: flex;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.locked-share-card {
+  width: min(100%, 22rem);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 1.375rem 1.25rem 1.25rem;
+  border-radius: 1.375rem;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 16px 40px -16px rgba(0, 0, 0, 0.18);
+}
+
+.locked-share-card--inline {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.locked-share-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 999px;
+  color: var(--foreground);
+  background: var(--secondary);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.locked-share-title {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.locked-share-copy {
+  margin: -0.45rem 0 0.05rem;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: rgba(10, 10, 10, 0.54);
+}
+
+.locked-share-dialog form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.locked-share-dialog [data-slot="dialog-header"] {
+  align-items: center;
+  text-align: center;
+  gap: 0.375rem;
+}
+
+.locked-share-dialog [data-slot="dialog-footer"] {
+  width: 100%;
+}
+
+.locked-share-dialog .locked-share-otp {
+  margin-top: 1rem;
+}
+
+.locked-share-otp {
+  display: flex;
+  justify-content: center;
+  gap: 0.425rem;
+}
+
+.locked-share-otp-input {
+  width: 2.5rem;
+  height: 3.125rem;
+  border: 1px solid rgba(0, 0, 0, 0.075);
+  border-radius: 0.95rem;
+  background: rgba(10, 10, 10, 0.035);
+  color: var(--foreground);
+  text-align: center;
+  font-size: 1.25rem;
+  font-weight: 600;
+  outline: none;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.035),
+    0 1px 0 rgba(255, 255, 255, 0.8);
+  transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.locked-share-otp-input:focus {
+  border-color: rgba(10, 10, 10, 0.5);
+  background: #ffffff;
+  box-shadow:
+    0 0 0 3px rgba(10, 10, 10, 0.08),
+    inset 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.locked-share-otp-input:disabled {
+  opacity: 0.55;
+}
+
+.locked-share-error {
+  min-height: 1rem;
+  margin: -0.35rem 0 0;
+  color: var(--destructive);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  text-align: center;
+}
+
+.locked-share-actions {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.locked-share-actions > button {
+  flex: 1 1 0;
+  border-radius: 999px;
 }
 
 /* ─── Segmented nav pill — [◀ | X / Y | ▶] ───────────────────────────── */

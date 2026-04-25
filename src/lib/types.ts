@@ -133,6 +133,51 @@ export interface Canvas {
   deleteTokenHash?: string;
 }
 
+export interface EncryptedShareImage {
+  id: string;
+  pageId: string;
+  key: string;
+  url: string;
+  iv: string;
+  size: number;
+}
+
+export interface EncryptedCanvasEnvelope {
+  id: string;
+  encrypted: true;
+  v: 1;
+  kdf: "PBKDF2-SHA-256";
+  iterations: number;
+  salt: string;
+  iv: string;
+  data: string;
+  images: EncryptedShareImage[];
+  createdAt: string;
+  pinVerifier?: {
+    kdf: "PBKDF2-SHA-256";
+    iterations: number;
+    salt: string;
+    hash: string;
+  };
+  deleteTokenHash?: string;
+}
+
+export interface LockedCanvasStub {
+  id: string;
+  encrypted: true;
+  locked: true;
+}
+
+export type StoredCanvas = Canvas | EncryptedCanvasEnvelope | LockedCanvasStub;
+
+export function isEncryptedCanvas(value: StoredCanvas): value is EncryptedCanvasEnvelope {
+  return "encrypted" in value && value.encrypted === true && "data" in value;
+}
+
+export function isLockedCanvasStub(value: StoredCanvas): value is LockedCanvasStub {
+  return "encrypted" in value && value.encrypted === true && "locked" in value;
+}
+
 export function isDraftImageItem(item: CanvasItem): item is DraftImageItem {
   return item.type === "image" && "file" in item;
 }

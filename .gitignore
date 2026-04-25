@@ -63,5 +63,8 @@ service-account*.json
 # cloudflare
 .wrangler/
 
+# local share storage fallback
+.shareboard-storage/
+
 # typescript
 *.tsbuildinfo

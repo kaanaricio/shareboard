@@ -44,11 +44,6 @@ function OGCard({ item, summary }: { item: UrlItem; summary?: ItemSummary }) {
   })();
 
   const showImage = Boolean(og?.image) && !imageFailed;
-  // Proxy through our origin so hotlink-blocking CDNs (GitHub opengraph,
-  // substack, etc.) don't rate-limit per-viewer browser requests.
-  const proxiedImage = og?.image
-    ? `/api/og/image?url=${encodeURIComponent(og.image)}`
-    : undefined;
 
   return (
     <a
@@ -60,13 +55,11 @@ function OGCard({ item, summary }: { item: UrlItem; summary?: ItemSummary }) {
       {showImage && (
         <div className="relative min-h-0 flex-1">
           <img
-            src={proxiedImage}
+            src={og?.image}
             alt={og?.title ?? ""}
             className="h-full w-full object-cover"
             loading="lazy"
             decoding="async"
-            // Hotlink-blocking CDNs key on Referer; no-referrer is the most
-            // reliable way to avoid 403s on user-submitted URLs.
             referrerPolicy="no-referrer"
             onError={() => setImageFailed(true)}
           />

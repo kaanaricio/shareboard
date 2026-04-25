@@ -1,22 +1,11 @@
 import { lookup } from "node:dns/promises";
-import type { LookupAddress, LookupOptions } from "node:dns";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
-import type { LookupFunction } from "node:net";
-import { Readable } from "node:stream";
 
 export const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-
-type ResolvedPublicUrl = {
-  url: URL;
-  address: string;
-  family: 4 | 6;
-};
 
 function isPrivateIp(address: string): boolean {
   if (address === "::1" || address === "0.0.0.0") return true;
@@ -39,7 +28,7 @@ function isPrivateIp(address: string): boolean {
   );
 }
 
-async function assertPublicUrl(value: string): Promise<ResolvedPublicUrl> {
+async function assertPublicUrl(value: string): Promise<URL> {
   const url = new URL(value);
   if (!["http:", "https:"].includes(url.protocol)) throw new Error("Only http(s) URLs are allowed");
   if (url.username || url.password) throw new Error("Authenticated URLs are not allowed");
@@ -53,7 +42,7 @@ async function assertPublicUrl(value: string): Promise<ResolvedPublicUrl> {
   }
 
   if (literal) {
-    return { url, address: literal, family: literal.includes(":") ? 6 : 4 };
+    return url;
   }
 
   const records = await lookup(url.hostname, { all: true });
@@ -61,12 +50,7 @@ async function assertPublicUrl(value: string): Promise<ResolvedPublicUrl> {
     throw new Error("Private hosts are not allowed");
   }
 
-  const [selected] = records;
-  if (!selected) {
-    throw new Error("Host could not be resolved");
-  }
-
-  return { url, address: selected.address, family: selected.family as 4 | 6 };
+  return url;
 }
 
 type PublicFetchResult = {
@@ -74,80 +58,13 @@ type PublicFetchResult = {
   url: string;
 };
 
-function requestPinnedUrl(target: ResolvedPublicUrl, init: RequestInit): Promise<Response> {
+function requestPublicUrl(url: URL, init: RequestInit): Promise<Response> {
   if (init.body) {
-    throw new Error("Pinned fetch does not support request bodies");
+    throw new Error("Public URL fetch does not support request bodies");
   }
-
-  const lookup: LookupFunction = (_hostname: string, options: LookupOptions, callback) => {
-    if (options.all) {
-      callback(null, [{ address: target.address, family: target.family } satisfies LookupAddress]);
-      return;
-    }
-    callback(null, target.address, target.family);
-  };
-
-  return new Promise((resolve, reject) => {
-    const isHttps = target.url.protocol === "https:";
-    const headers = new Headers(init.headers);
-    if (!headers.has("host")) headers.set("host", target.url.host);
-    const requestOptions = {
-      protocol: target.url.protocol,
-      hostname: target.url.hostname,
-      port: target.url.port || undefined,
-      path: `${target.url.pathname}${target.url.search}`,
-      method: init.method ?? "GET",
-      headers: Object.fromEntries(headers.entries()),
-      lookup,
-      ...(isHttps ? { servername: target.url.hostname } : {}),
-    };
-
-    const req = (isHttps ? httpsRequest : httpRequest)(
-      requestOptions,
-      (res) => {
-        const responseHeaders = new Headers();
-        for (const [key, value] of Object.entries(res.headers)) {
-          if (Array.isArray(value)) {
-            responseHeaders.set(key, value.join(", "));
-          } else if (value !== undefined) {
-            responseHeaders.set(key, value);
-          }
-        }
-
-        const status = res.statusCode ?? 502;
-        const body =
-          status === 204 || status === 304
-            ? null
-            : (Readable.toWeb(res) as ReadableStream<Uint8Array>);
-
-        resolve(
-          new Response(body, {
-            status,
-            statusText: res.statusMessage ?? "",
-            headers: responseHeaders,
-          })
-        );
-      }
-    );
-
-    req.on("error", reject);
-
-    const onAbort = () => {
-      req.destroy(
-        init.signal?.reason instanceof Error ? init.signal.reason : new Error("Request aborted")
-      );
-    };
-
-    if (init.signal) {
-      if (init.signal.aborted) {
-        onAbort();
-        return;
-      }
-      init.signal.addEventListener("abort", onAbort, { once: true });
-      req.on("close", () => init.signal?.removeEventListener("abort", onAbort));
-    }
-
-    req.end();
+  return fetch(url, {
+    ...init,
+    redirect: "manual",
   });
 }
 
@@ -159,15 +76,15 @@ export async function fetchPublicUrl(
   let current = await assertPublicUrl(value.toString());
 
   for (let redirects = 0; ; redirects++) {
-    const response = await requestPinnedUrl(current, init);
+    const response = await requestPublicUrl(current, init);
     if (!REDIRECT_STATUSES.has(response.status)) {
-      return { response, url: current.url.toString() };
+      return { response, url: current.toString() };
     }
 
     if (redirects >= maxRedirects) throw new Error("Too many redirects");
 
     const location = response.headers.get("location");
     if (!location) throw new Error("Redirect missing location");
-    current = await assertPublicUrl(new URL(location, current.url).toString());
+    current = await assertPublicUrl(new URL(location, current).toString());
   }
 }

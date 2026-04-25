@@ -249,40 +249,29 @@ export function mergeLayout(
     }
   }
 
-  // Pack new (non-persisted) tiles into the remaining space.
-  const fresh: SkylineInput[] = [];
+  // Pack new (non-persisted) tiles. Aspect-locked tiles try the preferred span
+  // first, then progressively smaller spans, picking the largest one whose
+  // skyline placement still fits within the row budget. This means a hoodie
+  // pasted into a tight gap shrinks to fit (preserving aspect) rather than
+  // shooting past the canvas bottom. If even minSpan won't fit, we still place
+  // it at minSpan; the caller (addItemWithSpill in home.tsx) sees the overflow
+  // via tentativeBottom > maxRows and spills to the next page.
   for (const spec of specs) {
     if (persistedById.has(spec.id)) continue;
-    const w = chooseSpan(spec, options);
-    const h = chooseRows(spec, w, options);
-    fresh.push({ id: spec.id, w, h, minW: spec.minSpan ?? 3, minH: spec.minRows ?? 3 });
-  }
+    const placement = placeFresh(spec, skyline, options);
 
-  for (const item of fresh) {
-    const w = Math.max(1, Math.min(options.columns, item.w));
-    let bestX = 0;
-    let bestY = Number.POSITIVE_INFINITY;
-    for (let x = 0; x <= options.columns - w; x++) {
-      let y = 0;
-      for (let k = 0; k < w; k++) y = Math.max(y, skyline[x + k]);
-      if (y < bestY) {
-        bestY = y;
-        bestX = x;
-      }
+    for (let k = 0; k < placement.w; k++) {
+      skyline[placement.x + k] = placement.y + placement.h;
     }
-    if (!Number.isFinite(bestY)) bestY = 0;
-
-    const y = bestY;
-    for (let k = 0; k < w; k++) skyline[bestX + k] = y + item.h;
 
     kept.push({
-      i: item.id,
-      x: bestX,
-      y,
-      w,
-      h: item.h,
-      ...(item.minW != null && { minW: Math.min(item.minW, w) }),
-      ...(item.minH != null && { minH: Math.min(item.minH, item.h) }),
+      i: spec.id,
+      x: placement.x,
+      y: placement.y,
+      w: placement.w,
+      h: placement.h,
+      ...(spec.minSpan != null && { minW: Math.min(spec.minSpan, placement.w) }),
+      ...(spec.minRows != null && { minH: Math.min(spec.minRows, placement.h) }),
     });
   }
 
@@ -301,6 +290,70 @@ export function mergeLayout(
   }
 
   return final;
+}
+
+/**
+ * Find the lowest-y placement for a tile of width `w` against `skyline`, ties
+ * broken left-to-right (matches packSkyline's behaviour).
+ */
+function lowestPlacement(
+  skyline: number[],
+  w: number,
+  columns: number,
+): { x: number; y: number } {
+  let bestX = 0;
+  let bestY = Number.POSITIVE_INFINITY;
+  const span = Math.max(1, Math.min(columns, w));
+  for (let x = 0; x <= columns - span; x++) {
+    let y = 0;
+    for (let k = 0; k < span; k++) y = Math.max(y, skyline[x + k]);
+    if (y < bestY) {
+      bestY = y;
+      bestX = x;
+    }
+  }
+  if (!Number.isFinite(bestY)) bestY = 0;
+  return { x: bestX, y: bestY };
+}
+
+/**
+ * Pick a placement for a fresh (non-persisted) tile.
+ *
+ * Aspect-locked tiles adaptively shrink: try preferredSpan, then step down to
+ * minSpan, and keep the largest span whose `y + h` fits in `maxRows`. Smaller
+ * w → proportionally smaller h, so a tall portrait that doesn't fit at span=8
+ * may still fit at span=4. If nothing fits, return the minSpan placement and
+ * let the caller decide whether to spill (non-empty page) or accept overflow
+ * (single-tile empty page).
+ *
+ * Flex tiles use the original chooseSpan/chooseRows result.
+ */
+function placeFresh(
+  spec: { id: string } & TileSpec,
+  skyline: number[],
+  options: PackOptions,
+): { x: number; y: number; w: number; h: number } {
+  const { columns, maxRows } = options;
+  const preferredSpan = chooseSpan(spec, options);
+
+  if (spec.aspect && spec.aspect > 0 && maxRows && maxRows > 0) {
+    const minSpan = Math.max(1, Math.min(preferredSpan, spec.minSpan ?? 3));
+    for (let w = preferredSpan; w >= minSpan; w--) {
+      const h = chooseRows(spec, w, options);
+      const { x, y } = lowestPlacement(skyline, w, columns);
+      if (y + h <= maxRows) return { x, y, w, h };
+    }
+    // Nothing fits — fall through to minSpan placement (overflow allowed).
+    const w = minSpan;
+    const h = chooseRows(spec, w, options);
+    const { x, y } = lowestPlacement(skyline, w, columns);
+    return { x, y, w, h };
+  }
+
+  const w = preferredSpan;
+  const h = chooseRows(spec, w, options);
+  const { x, y } = lowestPlacement(skyline, w, columns);
+  return { x, y, w, h };
 }
 
 function clamp(n: number, lo: number, hi: number): number {

@@ -1,14 +1,25 @@
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes, createHash, pbkdf2, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 import { createFileRoute } from "@tanstack/react-router";
-import { deleteObject, getObjectKeyFromPublicUrlAsync, getObjectText, putBuffer, putObject } from "@/lib/r2";
+import {
+  deleteObject,
+  getObjectKeyFromPublicUrlAsync,
+  getObjectResponse,
+  getObjectText,
+  putBuffer,
+  putObject,
+} from "@/lib/r2";
 import { takeRateLimit } from "@/lib/rate-limit";
 import type {
   AuthorProfile,
   Canvas,
+  EncryptedCanvasEnvelope,
+  EncryptedShareImage,
   GenerateResponse,
   GridLayouts,
   OGData,
   Platform,
+  StoredCanvas,
   SharedBoardPage,
   SharedCanvasItem,
   UrlItem,
@@ -49,11 +60,36 @@ type SharePayload = {
   pages?: unknown;
 };
 
+type EncryptedSharePayload = Omit<EncryptedCanvasEnvelope, "deleteTokenHash">;
+
 const MAX_SOCIAL_URL = 2048;
 const MANIFEST_CACHE_CONTROL = "public, max-age=3600, stale-while-revalidate=86400";
+const LOCKED_PIN_ITERATIONS = 350_000;
+const pbkdf2Async = promisify(pbkdf2);
 
 function createShareId() {
   return randomBytes(18).toString("base64url");
+}
+
+async function getRuntimeSecret() {
+  try {
+    const cf = await import(/* @vite-ignore */ "cloudflare:workers");
+    const secret = String(cf.env?.SHAREBOARD_LOCKED_STORAGE_SECRET ?? "").trim();
+    if (secret) return secret;
+    if (!String(cf.env?.R2_PUBLIC_URL ?? "").trim()) return "shareboard-local-locked-storage";
+  } catch {
+    // Local preview falls back below.
+  }
+  const secret = String(process.env.SHAREBOARD_LOCKED_STORAGE_SECRET ?? "").trim();
+  if (secret) return secret;
+  if (!String(process.env.R2_PUBLIC_URL ?? "").trim()) return "shareboard-local-locked-storage";
+  throw new Error("Locked share storage secret is not configured");
+}
+
+async function lockedCanvasKey(id: string) {
+  const secret = await getRuntimeSecret();
+  const digest = createHash("sha256").update(secret).update(":").update(id).digest("base64url");
+  return `locked/${digest}.json`;
 }
 
 function isSocialHost(url: string, kind: "x" | "instagram" | "linkedin"): boolean {
@@ -138,6 +174,38 @@ function keepHttpUrl(value: unknown, max: number) {
 
 function hashToken(token: string) {
   return createHash("sha256").update(token).digest("hex");
+}
+
+function keepToken(value: unknown, max: number) {
+  return typeof value === "string" && value.length <= max && /^[A-Za-z0-9_-]+$/.test(value) ? value : "";
+}
+
+function cleanPin(value: unknown) {
+  return typeof value === "string" ? value.replace(/\D/g, "").slice(0, 6) : "";
+}
+
+async function createPinVerifier(pin: string): Promise<NonNullable<EncryptedCanvasEnvelope["pinVerifier"]>> {
+  const salt = randomBytes(16);
+  const hash = await pbkdf2Async(pin, salt, LOCKED_PIN_ITERATIONS, 32, "sha256");
+  return {
+    kdf: "PBKDF2-SHA-256",
+    iterations: LOCKED_PIN_ITERATIONS,
+    salt: salt.toString("base64url"),
+    hash: hash.toString("base64url"),
+  };
+}
+
+async function verifyPin(pin: string, verifier: NonNullable<EncryptedCanvasEnvelope["pinVerifier"]>) {
+  if (verifier.kdf !== "PBKDF2-SHA-256") return false;
+  const expected = Buffer.from(verifier.hash, "base64url");
+  const actual = await pbkdf2Async(
+    pin,
+    Buffer.from(verifier.salt, "base64url"),
+    verifier.iterations,
+    expected.byteLength,
+    "sha256"
+  );
+  return expected.byteLength === actual.byteLength && timingSafeEqual(expected, actual);
 }
 
 function sanitizeOgData(value: unknown): OGData | undefined {
@@ -284,6 +352,77 @@ function parsePayload(raw: string | undefined) {
   return payload;
 }
 
+function parseEncryptedPayload(raw: string | undefined): EncryptedSharePayload {
+  if (!raw) throw new Error("Missing encrypted payload");
+  const payload = JSON.parse(raw) as Record<string, unknown>;
+  const id = keepToken(payload.id, 80);
+  if (!id || id.length < 16) throw new Error("Invalid encrypted board id");
+  if (payload.encrypted !== true || payload.v !== 1 || payload.kdf !== "PBKDF2-SHA-256") {
+    throw new Error("Invalid encrypted board");
+  }
+
+  const iterations = Number(payload.iterations);
+  if (!Number.isFinite(iterations) || iterations < 100_000 || iterations > 1_000_000) {
+    throw new Error("Invalid encryption settings");
+  }
+
+  const salt = keepToken(payload.salt, 128);
+  const iv = keepToken(payload.iv, 128);
+  const data = keepToken(payload.data, 25_000_000);
+  if (!salt || !iv || !data) throw new Error("Invalid encrypted board");
+
+  const images = Array.isArray(payload.images)
+    ? payload.images.map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const image = entry as Record<string, unknown>;
+        const imageId = trimText(image.id, 80);
+        const pageId = trimText(image.pageId, 80);
+        const key = trimText(image.key, 180);
+        const imageIv = keepToken(image.iv, 128);
+        const size = Number(image.size);
+        if (
+          !imageId ||
+          !pageId ||
+          !imageIv ||
+          !Number.isFinite(size) ||
+          size <= 0
+        ) {
+          return null;
+        }
+        return {
+          id: imageId,
+          pageId,
+          key,
+          url: "",
+          iv: imageIv,
+          size: Math.floor(size),
+        } satisfies EncryptedShareImage;
+      })
+    : [];
+
+  if (images.some((image) => !image)) throw new Error("Invalid encrypted image");
+  if (images.length > SHARE_LIMITS.maxImages) {
+    throw new Error(`Too many images (max ${SHARE_LIMITS.maxImages})`);
+  }
+  const totalBytes = images.reduce((sum, image) => sum + (image?.size ?? 0), 0);
+  if (totalBytes > SHARE_LIMITS.maxTotalImageBytes) {
+    throw new Error(`Images exceed ${Math.floor(SHARE_LIMITS.maxTotalImageBytes / 1024 / 1024)} MB total`);
+  }
+
+  return {
+    id,
+    encrypted: true,
+    v: 1,
+    kdf: "PBKDF2-SHA-256",
+    iterations: Math.floor(iterations),
+    salt,
+    iv,
+    data,
+    images: images.filter((image): image is EncryptedShareImage => !!image),
+    createdAt: trimText(payload.createdAt, 40) || new Date().toISOString(),
+  };
+}
+
 /** Counters shared across pages to enforce board-wide image caps. */
 type ImageCounters = { count: number; bytes: number };
 
@@ -409,6 +548,42 @@ export const Route = createFileRoute("/api/share")({
           return Response.json({ error: "Forbidden" }, { status: 403 });
         }
         const ip = getClientIp(request);
+        const contentType = request.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          try {
+            const body = (await request.json()) as Record<string, unknown>;
+            if (body.action !== "unlock") {
+              return Response.json({ error: "Invalid request" }, { status: 400 });
+            }
+            const id = keepToken(body.id, 80);
+            const pin = cleanPin(body.pin);
+            if (!id || pin.length !== 6) {
+              return Response.json({ error: "Invalid PIN" }, { status: 400 });
+            }
+            const rate = takeRateLimit(`share-unlock:${id}:${ip}`, 5, 10 * 60 * 1000);
+            const globalRate = takeRateLimit(`share-unlock-board:${id}`, 30, 10 * 60 * 1000);
+            if (!rate.ok || !globalRate.ok) {
+              return Response.json(
+                { error: "Too many unlock attempts. Try again shortly." },
+                { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds || globalRate.retryAfterSeconds) } }
+              );
+            }
+
+            const raw = await getObjectText(await lockedCanvasKey(id));
+            if (!raw) return Response.json({ error: "Board not found" }, { status: 404 });
+            const canvas = JSON.parse(raw) as EncryptedCanvasEnvelope;
+            if (!canvas.pinVerifier || !(await verifyPin(pin, canvas.pinVerifier))) {
+              return Response.json({ error: "Invalid PIN" }, { status: 403 });
+            }
+            const { pinVerifier: _pinVerifier, deleteTokenHash: _deleteTokenHash, ...unlocked } = canvas;
+            return Response.json(unlocked, { headers: { "Cache-Control": "no-store" } });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to unlock board";
+            const status = /secret is not configured/i.test(message) ? 503 : 500;
+            return Response.json({ error: status === 500 ? "Failed to unlock board" : message }, { status });
+          }
+        }
+
         const rate = takeRateLimit(`share:${ip}`, 20, 10 * 60 * 1000);
         if (!rate.ok) {
           return Response.json(
@@ -420,6 +595,53 @@ export const Route = createFileRoute("/api/share")({
         const uploadedKeys: string[] = [];
         try {
           const form = await request.formData();
+          const encryptedRaw = form.get("encryptedPayload")?.toString();
+          if (encryptedRaw) {
+            const payload = parseEncryptedPayload(encryptedRaw);
+            const pin = cleanPin(form.get("pin"));
+            if (pin.length !== 6) throw new Error("Invalid PIN");
+            const lockedKey = await lockedCanvasKey(payload.id);
+            const existing = await getObjectText(lockedKey);
+            if (existing) throw new Error("Share id already exists");
+
+            const files = new Map<string, File>();
+            for (const [key, value] of form.entries()) {
+              if (!key.startsWith("encrypted-image:") || !(value instanceof File)) continue;
+              files.set(key.slice("encrypted-image:".length), value);
+            }
+
+            const images = await Promise.all(
+              payload.images.map(async (image) => {
+                const file = files.get(image.id);
+                if (!file) throw new Error(`Missing encrypted image upload for item ${image.id}`);
+                if (file.size !== image.size) throw new Error("Encrypted image size mismatch");
+                if (file.size > SHARE_LIMITS.maxImageBytes + 1024) {
+                  throw new Error(`Image ${image.id} exceeds ${Math.floor(SHARE_LIMITS.maxImageBytes / 1024 / 1024)} MB`);
+                }
+                const bytes = Buffer.from(await file.arrayBuffer());
+                const key = `locked-images/${randomBytes(24).toString("base64url")}`;
+                const url = await putBuffer(
+                  key,
+                  bytes,
+                  "application/octet-stream",
+                  "public, max-age=31536000, immutable"
+                );
+                uploadedKeys.push(key);
+                return { ...image, key, url };
+              })
+            );
+
+            const deleteToken = randomBytes(24).toString("base64url");
+            const canvas: EncryptedCanvasEnvelope = {
+              ...payload,
+              images,
+              pinVerifier: await createPinVerifier(pin),
+              deleteTokenHash: hashToken(deleteToken),
+            };
+            await putObject(lockedKey, JSON.stringify(canvas), "no-store");
+            return Response.json({ id: payload.id, deleteToken });
+          }
+
           const payload = parsePayload(form.get("payload")?.toString());
 
           const files = new Map<string, File>();
@@ -451,6 +673,8 @@ export const Route = createFileRoute("/api/share")({
           const message = error instanceof Error ? error.message : "Failed to share board";
           const status = /too many|exceed|invalid|missing|unsupported|must include|only image/i.test(message)
             ? 400
+            : /already exists/i.test(message)
+              ? 409
             : /storage is not configured/i.test(message)
               ? 503
               : /sharing storage/i.test(message)
@@ -458,6 +682,39 @@ export const Route = createFileRoute("/api/share")({
                 : 500;
           return Response.json({ error: message }, { status });
         }
+      },
+
+      GET: async ({ request }) => {
+        const url = new URL(request.url);
+        const key = trimText(url.searchParams.get("key"), 4096);
+        const canvasId = key.match(/^canvases\/([A-Za-z0-9_-]+)\.json$/)?.[1];
+        if (canvasId) {
+          const publicRaw = await getObjectText(key);
+          if (publicRaw) {
+            const canvas = JSON.parse(publicRaw) as StoredCanvas;
+            if ("encrypted" in canvas && canvas.encrypted === true) {
+              return Response.json(
+                { id: canvasId, encrypted: true, locked: true },
+                { headers: { "Cache-Control": "no-store" } }
+              );
+            }
+            return new Response(publicRaw, {
+              headers: { "Content-Type": "application/json", "Cache-Control": MANIFEST_CACHE_CONTROL },
+            });
+          }
+          const lockedRaw = await getObjectText(await lockedCanvasKey(canvasId));
+          if (!lockedRaw) return Response.json({ error: "Object not found" }, { status: 404 });
+          return Response.json(
+            { id: canvasId, encrypted: true, locked: true },
+            { headers: { "Cache-Control": "no-store" } }
+          );
+        }
+
+        if (!key.startsWith("images/") && !key.startsWith("locked-images/") && !key.startsWith("canvases/")) {
+          return Response.json({ error: "Invalid object key" }, { status: 400 });
+        }
+        const object = await getObjectResponse(key);
+        return object ?? Response.json({ error: "Object not found" }, { status: 404 });
       },
 
       DELETE: async ({ request }) => {
@@ -485,26 +742,31 @@ export const Route = createFileRoute("/api/share")({
 
         try {
           const raw = await getObjectText(`canvases/${id}.json`);
-          if (!raw) {
+          const canvasKey = raw ? `canvases/${id}.json` : await lockedCanvasKey(id);
+          const storedRaw = raw ?? (await getObjectText(canvasKey));
+          if (!storedRaw) {
             return Response.json({ error: "Board not found" }, { status: 404 });
           }
 
-          const canvas = JSON.parse(raw) as Canvas;
+          const canvas = JSON.parse(storedRaw) as StoredCanvas;
           if (!canvas.deleteTokenHash || canvas.deleteTokenHash !== hashToken(token)) {
             return Response.json({ error: "Invalid delete token" }, { status: 403 });
           }
 
-          const keys = (
-            await Promise.all(
-              canvas.pages
-                .flatMap((page) => page.items)
-                .filter((item): item is Extract<SharedCanvasItem, { type: "image" }> => item.type === "image")
-                .map((item) => item.objectKey ?? getObjectKeyFromPublicUrlAsync(item.url))
-            )
-          ).filter((key): key is string => !!key);
+          const keys =
+            "images" in canvas
+              ? canvas.images.map((image) => image.key)
+              : (
+                  await Promise.all(
+                    canvas.pages
+                      .flatMap((page) => page.items)
+                      .filter((item): item is Extract<SharedCanvasItem, { type: "image" }> => item.type === "image")
+                      .map((item) => item.objectKey ?? getObjectKeyFromPublicUrlAsync(item.url))
+                  )
+                ).filter((key): key is string => !!key);
 
           await Promise.all(keys.map((key) => deleteObject(key)));
-          await deleteObject(`canvases/${id}.json`);
+          await deleteObject(canvasKey);
 
           return Response.json({ ok: true });
         } catch (error) {

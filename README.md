@@ -24,8 +24,11 @@ Copy `.env.example` → `.env` and fill in values:
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN`
 - `R2_PUBLIC_URL`
+- `SHAREBOARD_LOCKED_STORAGE_SECRET` (required for production locked boards)
 
 On Cloudflare Workers, the app prefers the `SHAREBOARD_R2` bucket binding in `wrangler.jsonc`; the account ID/API token path is only a fallback for local or legacy deployments. `R2_PUBLIC_URL` is required as a Worker secret so shared image URLs can point directly at R2 instead of proxying through the app.
+
+Locked boards keep their encrypted manifest behind a server-derived storage key so the ciphertext is not downloadable before PIN verification. Set `SHAREBOARD_LOCKED_STORAGE_SECRET` to a long random value before enabling locked boards on a public deployment.
 
 Do not commit account-specific URLs, tokens, bucket endpoints, API keys, or internal planning docs. This repository is intended to be public and self-hostable.
 

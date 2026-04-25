@@ -180,14 +180,22 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
   // Example: [{ i:"a", x:0, y:0, w:6, h:6 }, { i:"b", x:6, y:0, w:6, h:6 }]
   const preInteractionRef = useRef<Layout | null>(null);
 
-  const handleInteractionStart = useCallback((current: Layout) => {
-    preInteractionRef.current = current.map((l) => ({ ...l }));
-    document.body.classList.add("grid-interacting");
-  }, []);
+  const handleInteractionStart = useCallback(
+    (current: Layout, kind: "drag" | "resize") => {
+      preInteractionRef.current = current.map((l) => ({ ...l }));
+      document.body.classList.add("grid-interacting");
+      // Resize-specific class so the placeholder can render as the *primary*
+      // snap-target signal (above the live tile, stronger contrast). During
+      // drag we keep the quieter ghost — the user's eye follows the card.
+      if (kind === "resize") document.body.classList.add("grid-resizing");
+    },
+    [],
+  );
 
   const handleInteractionStop = useCallback(
     (next: Layout) => {
       document.body.classList.remove("grid-interacting");
+      document.body.classList.remove("grid-resizing");
       if (!onLayoutChange || readonly) return;
 
       const before = preInteractionRef.current ?? [];
@@ -252,16 +260,16 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
           autoSize={true}
           dragConfig={{
             enabled: !readonly,
-            cancel: ".ProseMirror, input, textarea, [contenteditable=true], .grid-card-close",
+            cancel: ".ProseMirror, input, textarea, [contenteditable=true], .grid-card-close, .grid-no-drag",
           }}
           resizeConfig={{ enabled: !readonly, handles: ["se", "sw", "ne", "nw"] }}
           compactor={freePlacementCompactor}
           onBreakpointChange={(bp: string) => {
             breakpointRef.current = bp === "sm" ? "sm" : "lg";
           }}
-          onDragStart={(l: Layout) => handleInteractionStart(l)}
+          onDragStart={(l: Layout) => handleInteractionStart(l, "drag")}
           onDragStop={(l: Layout) => handleInteractionStop(l)}
-          onResizeStart={(l: Layout) => handleInteractionStart(l)}
+          onResizeStart={(l: Layout) => handleInteractionStart(l, "resize")}
           onResizeStop={(l: Layout) => handleInteractionStop(l)}
         >
           {children}

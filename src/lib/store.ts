@@ -20,7 +20,7 @@ type LastShare = {
 
 export type BoardHistoryEntry = {
   id: string;
-  kind: "tiny" | "stored";
+  kind: "tiny" | "stored" | "locked";
   title: string;
   subtitle: string;
   shareUrl: string;
@@ -127,7 +127,7 @@ export function getBoardHistory(): BoardHistoryEntry[] {
         const e = entry as Record<string, unknown>;
         return (
           typeof e.id === "string" &&
-          (e.kind === "tiny" || e.kind === "stored") &&
+          (e.kind === "tiny" || e.kind === "stored" || e.kind === "locked") &&
           typeof e.title === "string" &&
           typeof e.subtitle === "string" &&
           typeof e.shareUrl === "string" &&

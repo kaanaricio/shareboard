@@ -6,8 +6,8 @@ import { notify } from "@/lib/toast";
 import { Canvas } from "@/components/canvas";
 import { Toolbar } from "@/components/toolbar";
 import { SetupCards } from "@/components/setup-dialog";
+import { LockedShareDialog } from "@/components/locked-share-dialog";
 import { BoardCarousel } from "@/components/board-carousel";
-import { MobileEditorBanner } from "@/components/mobile-editor-banner";
 import { Toaster } from "@/components/ui/sonner";
 import {
   Dialog,
@@ -56,6 +56,11 @@ import { BOARD_SUMMARY_ITEM_ID, isDraftImageItem } from "@/lib/types";
 import { IMAGE_POLICY, formatBytes, optimizeImageForShare } from "@/lib/image-policy";
 import { createTinyShareUrl } from "@/lib/tiny-share";
 import { copyText } from "@/lib/clipboard";
+import {
+  createLockedShareId,
+  createLockedSharePackage,
+  type LockedImageUpload,
+} from "@/lib/encrypted-share";
 
 type SharePayload = {
   author: string;
@@ -141,7 +146,8 @@ function getBoardTitle(pages: SharePayload["pages"]) {
 function getHistorySubtitle(kind: BoardHistoryEntry["kind"], pageCount: number, itemCount: number) {
   const itemLabel = itemCount === 1 ? "item" : "items";
   const pageLabel = pageCount === 1 ? "page" : "pages";
-  return `${kind === "tiny" ? "Stored in link" : "Encrypted share"} · ${itemCount} ${itemLabel} · ${pageCount} ${pageLabel}`;
+  const prefix = kind === "tiny" ? "Stored in link" : kind === "locked" ? "Locked share" : "Public share";
+  return `${prefix} · ${itemCount} ${itemLabel} · ${pageCount} ${pageLabel}`;
 }
 
 function pagesFromHistoryCanvas(canvas: SharedCanvasData): BoardPage[] {
@@ -187,6 +193,8 @@ export function Home() {
   const [hasLastSharedBoard, setHasLastSharedBoard] = useState(false);
   const [history, setHistory] = useState<BoardHistoryEntry[]>([]);
   const [shareState, setShareState] = useState<"idle" | "sharing" | "copied">("idle");
+  const [lockedShareOpen, setLockedShareOpen] = useState(false);
+  const [lockedShareBusy, setLockedShareBusy] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deleteDialogIds, setDeleteDialogIds] = useState<string[] | null>(null);
   const [manualShareUrl, setManualShareUrl] = useState("");
@@ -662,6 +670,100 @@ export function Home() {
     }
   }, [pages, generation, shareState, finishShare]);
 
+  const shareLocked = useCallback(
+    async (pin: string) => {
+      if (lockedShareBusy || shareState === "sharing") return;
+      setLockedShareBusy(true);
+      setShareState("sharing");
+      try {
+        const id = createLockedShareId();
+        const createdAt = new Date().toISOString();
+        const imageUploads: LockedImageUpload[] = [];
+        const securePages: SharedCanvasData["pages"] = [];
+
+        for (const page of pages) {
+          const items: SharedCanvasData["pages"][number]["items"] = [];
+          for (const item of page.items) {
+            if (item.type === "board_summary") continue;
+            if (item.type !== "image") {
+              items.push(item);
+              continue;
+            }
+
+            const key = `images/${id}/${page.id}/${item.id}`;
+            const source = isDraftImageItem(item)
+              ? item.file
+              : await fetch(item.url).then((res) => {
+                  if (!res.ok) throw new Error("Could not prepare image for locked share");
+                  return res.blob();
+                });
+            imageUploads.push({ id: item.id, pageId: page.id, key, file: source });
+            items.push({
+              id: item.id,
+              type: "image",
+              url: "",
+              objectKey: key,
+              mimeType: item.mimeType,
+              size: item.size,
+              caption: item.caption,
+            });
+          }
+          securePages.push({ id: page.id, layouts: page.layouts, items });
+        }
+
+        const itemCount = securePages.reduce((n, page) => n + page.items.length, 0);
+        const title = getBoardTitle(securePages);
+        const canvas: SharedCanvasData = {
+          id,
+          author: getName() || "Anonymous",
+          authorProfile: getProfile(),
+          pages: securePages,
+          ...(generation ? { generation } : {}),
+          createdAt,
+        };
+        const locked = await createLockedSharePackage(pin, canvas, imageUploads);
+        const form = new FormData();
+        form.set("pin", pin);
+        form.set("encryptedPayload", JSON.stringify(locked.envelope));
+        for (const file of locked.files) {
+          form.set(
+            `encrypted-image:${file.id}`,
+            new File([file.data], `${file.id}.bin`, { type: "application/octet-stream" })
+          );
+        }
+
+        const res = await fetch("/api/share", { method: "POST", body: form });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: "Failed to create locked share" }));
+          throw new Error(err.error || "Failed to create locked share");
+        }
+        const { id: shareId, deleteToken } = (await res.json()) as ShareResponse;
+        const shareUrl = `${window.location.origin}/c/${shareId}`;
+        saveLastSharedBoard({ id: shareId, deleteToken, shareUrl });
+        setHasLastSharedBoard(true);
+        saveBoardHistory({
+          id: shareId,
+          kind: "locked",
+          title,
+          subtitle: getHistorySubtitle("locked", securePages.length, itemCount),
+          shareUrl,
+          createdAt,
+          itemCount,
+          pageCount: securePages.length,
+        });
+        setHistory(getBoardHistory());
+        setLockedShareOpen(false);
+        await finishShare(shareUrl);
+      } catch (error) {
+        setShareState("idle");
+        notify.error(error instanceof Error ? error.message : "Failed to create locked share");
+      } finally {
+        setLockedShareBusy(false);
+      }
+    },
+    [pages, generation, lockedShareBusy, shareState, finishShare]
+  );
+
   const deleteLastShare = useCallback(async () => {
     const lastShare = getLastSharedBoard();
     if (!lastShare) {
@@ -944,8 +1046,6 @@ export function Home() {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
-      <MobileEditorBanner />
-
       <div className="board-notch" data-locked={needsSetup || undefined}>
         <button
           type="button"
@@ -1004,7 +1104,7 @@ export function Home() {
         onAddImage={addImage}
         onAddNote={addNote}
         onGenerate={generate}
-        onShare={share}
+        onShare={() => setLockedShareOpen(true)}
         onDeleteLastShare={deleteLastShare}
         onOpenHistoryEntry={openHistoryEntry}
         onRemoveHistoryEntry={removeHistoryEntry}
@@ -1012,29 +1112,42 @@ export function Home() {
 
       {needsSetup && <SetupCards onComplete={() => setNeedsSetup(false)} />}
 
+      <LockedShareDialog
+        open={lockedShareOpen}
+        busy={lockedShareBusy}
+        onOpenChange={setLockedShareOpen}
+        onCreate={shareLocked}
+      />
+
       <Dialog
         open={deleteDialogIds !== null}
         onOpenChange={(open) => {
           if (!open) setDeleteDialogIds(null);
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-xs">
           <DialogHeader>
             <DialogTitle>
               Remove {deleteDialogIds?.length ?? 0} item
               {deleteDialogIds && deleteDialogIds.length !== 1 ? "s" : ""}?
             </DialogTitle>
-            <DialogDescription>
-              This cannot be undone. Selected cards will be removed from this page.
+            <DialogDescription className="text-pretty">
+              These cards will be removed from this page. This can&apos;t be undone.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="mt-2 sm:justify-end">
-            <Button type="button" variant="outline" onClick={() => setDeleteDialogIds(null)}>
+          <DialogFooter className="mt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteDialogIds(null)}
+            >
               Cancel
             </Button>
             <Button
               type="button"
               variant="destructive"
+              size="sm"
               onClick={() => {
                 if (deleteDialogIds) removeItems(activePage, deleteDialogIds);
                 setDeleteDialogIds(null);

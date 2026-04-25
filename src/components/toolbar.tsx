@@ -1,6 +1,5 @@
-import { useState, useRef } from "react";
-import { Popover as PopoverPrimitive } from "@base-ui/react/popover";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { isPlausibleOpenaiApiKey, sanitizeOpenaiApiKeyInput } from "@/lib/openai-api-key";
 import { setApiKey, setName, setProfile, getName, getApiKey, getProfile } from "@/lib/store";
@@ -10,7 +9,7 @@ import {
   ImagePlus,
   Type,
   Sparkles,
-  Share2,
+  LockKeyhole,
   Settings,
   Loader2,
   Trash2,
@@ -63,11 +62,22 @@ export function Toolbar({
   onOpenHistoryEntry: (entry: BoardHistoryEntry) => void;
   onRemoveHistoryEntry: (id: string) => void;
 }) {
-  // Uncontrolled popovers: base-ui's trigger handles open/close (and the
-  // toggle on second-click). We only need a ref to close programmatically
-  // after Save / opening a history entry.
-  const settingsActions = useRef<PopoverPrimitive.Root.Actions>(null);
-  const historyActions = useRef<PopoverPrimitive.Root.Actions>(null);
+  // Single source of truth for which toolbar menu (if any) is open. base-ui's
+  // Popover dropped second-click toggles via stickIfOpen + PATIENT_CLICK_THRESHOLD;
+  // we mirror ActionFan's pattern instead. The document-level mousedown listener
+  // closes any open menu when clicking elsewhere — including another trigger —
+  // so opening one naturally closes the previous one.
+  //
+  // Toggle uses a functional setter so two synchronous clicks chain
+  // (null → "settings" → null) instead of both reading the stale snapshot.
+  // openMenu shape: "settings" | "history" | null
+  const [openMenu, setOpenMenu] = useState<"settings" | "history" | null>(null);
+  const settingsOpen = openMenu === "settings";
+  const historyOpen = openMenu === "history";
+  const toggleMenu = (id: "settings" | "history") =>
+    setOpenMenu((prev) => (prev === id ? null : id));
+  const closeMenu = () => setOpenMenu(null);
+
   const [settingsName, setSettingsName] = useState("");
   const [settingsKey, setSettingsKey] = useState("");
   const [settingsX, setSettingsX] = useState("");
@@ -113,8 +123,8 @@ export function Toolbar({
       disabled: isGenerating || !hasApiKey || !hasItems,
     },
     {
-      label: "Share board",
-      icon: <Share2 className="h-4 w-4" />,
+      label: "Locked share",
+      icon: <LockKeyhole className="h-4 w-4" />,
       onClick: onShare,
       disabled: !hasItems,
     },
@@ -129,6 +139,13 @@ export function Toolbar({
     setSettingsLi(p.linkedinUrl ?? "");
   };
 
+  // Re-hydrate settings inputs whenever the menu opens.
+  useEffect(() => {
+    if (settingsOpen) hydrateSettingsFields();
+    // hydrateSettingsFields uses freshest store values on each call
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsOpen]);
+
   const saveSettings = () => {
     if (settingsName.trim()) setName(settingsName.trim());
     setApiKey(settingsKey);
@@ -137,7 +154,7 @@ export function Toolbar({
       instagramUrl: settingsIg.trim(),
       linkedinUrl: settingsLi.trim(),
     });
-    settingsActions.current?.close();
+    closeMenu();
   };
 
   return (
@@ -152,25 +169,14 @@ export function Toolbar({
       >
         {/* Left: settings */}
         <div className="board-toolbar-left">
-          <Popover
-            actionsRef={settingsActions}
-            onOpenChange={(open) => {
-              if (open) hydrateSettingsFields();
-            }}
+          <ToolbarMenu
+            open={settingsOpen}
+            onToggle={() => toggleMenu("settings")}
+            onClose={closeMenu}
+            ariaLabel="Settings"
+            popupClassName="board-popover board-popover--settings"
+            triggerIcon={<Settings className="h-4 w-4 text-foreground/60" />}
           >
-            <PopoverTrigger
-              className="board-toolbar-icon"
-              aria-label="Settings"
-              title="Settings"
-            >
-              <Settings className="h-4 w-4 text-foreground/60" />
-            </PopoverTrigger>
-            <PopoverContent
-              side="top"
-              sideOffset={12}
-              align="start"
-              className="board-popover board-popover--settings"
-            >
               <div className="setup-dialog-tile">
                 <span className="setup-dialog-tile-label">Display name</span>
                 <input
@@ -268,23 +274,18 @@ export function Toolbar({
                   <span>Delete last shared board</span>
                 </button>
               )}
-            </PopoverContent>
-          </Popover>
+          </ToolbarMenu>
 
-          <Popover actionsRef={historyActions}>
-            <PopoverTrigger
-              className="board-toolbar-icon"
-              aria-label="Recent boards"
-              title="Recent boards"
-            >
-              <Clock3 className="h-4 w-4 text-foreground/60" />
-            </PopoverTrigger>
-            <PopoverContent
-              side="top"
-              sideOffset={12}
-              align="start"
-              className="board-popover board-popover--history"
-            >
+          <ToolbarMenu
+            open={historyOpen}
+            onToggle={() => toggleMenu("history")}
+            onClose={closeMenu}
+            ariaLabel="Recent boards"
+            popupClassName={`board-popover board-popover--history${
+              history.length === 0 ? " board-popover--history-empty" : ""
+            }`}
+            triggerIcon={<Clock3 className="h-4 w-4 text-foreground/60" />}
+          >
               <div className="board-popover-section board-history">
                 {history.length === 0 ? (
                   <div className="board-history-empty">Recent shares appear here.</div>
@@ -296,7 +297,7 @@ export function Toolbar({
                         className="board-history-main"
                         onClick={() => {
                           onOpenHistoryEntry(entry);
-                          historyActions.current?.close();
+                          closeMenu();
                         }}
                       >
                         <span className="board-history-title">{entry.title}</span>
@@ -315,8 +316,7 @@ export function Toolbar({
                   ))
                 )}
               </div>
-            </PopoverContent>
-          </Popover>
+          </ToolbarMenu>
         </div>
 
         {/* Center: Plus button (pill) with radial fan menu */}
@@ -338,5 +338,83 @@ export function Toolbar({
         </div>
       </div>
     </>
+  );
+}
+
+// Plain anchored menu: trigger calls onToggle (parent uses functional setter),
+// document mousedown calls onClose. Mirrors ActionFan so behavior matches the
+// plus button.
+function ToolbarMenu({
+  open,
+  onToggle,
+  onClose,
+  ariaLabel,
+  triggerIcon,
+  popupClassName,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+  ariaLabel: string;
+  triggerIcon: ReactNode;
+  popupClassName: string;
+  children: ReactNode;
+}) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocDown(e: MouseEvent) {
+      if (wrapperRef.current?.contains(e.target as Node)) return;
+      onClose();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("mousedown", onDocDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
+
+  return (
+    <div ref={wrapperRef} className="board-toolbar-menu">
+      <button
+        type="button"
+        className="board-toolbar-icon"
+        aria-label={ariaLabel}
+        title={ariaLabel}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={onToggle}
+      >
+        {triggerIcon}
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            key="popup"
+            className={`board-toolbar-menu-popup ${popupClassName}`}
+            // Open uses ActionFan's spring for the bouncy pop-in. Close uses
+            // a snappy tween — springs feel sluggish for dismissals because
+            // they ease out instead of cutting.
+            initial={{ opacity: 0, y: 8, scale: 0.92 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{
+              opacity: 0,
+              y: 4,
+              scale: 0.96,
+              transition: { duration: 0.1, ease: "easeOut" },
+            }}
+            transition={{ type: "spring", stiffness: 320, damping: 26, mass: 0.8 }}
+          >
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

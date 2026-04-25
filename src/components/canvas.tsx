@@ -262,7 +262,7 @@ export function Canvas({
                   }
                   const target = e.target as HTMLElement | null;
                   if (
-                    target?.closest(".ProseMirror, input, textarea, [contenteditable=true]")
+                    target?.closest(".ProseMirror, input, textarea, [contenteditable=true], .grid-no-drag")
                   ) {
                     return;
                   }
@@ -283,7 +283,7 @@ export function Canvas({
                     </button>
                   </div>
                 )}
-                {item.type === "url" && !readonly && !isTwitterItem(item) && (
+                {item.type === "url" && !readonly && !isTwitterItem(item) && item.platform !== "youtube" && (
                   <div className="absolute inset-0 z-10 rounded-3xl" />
                 )}
                 <div
