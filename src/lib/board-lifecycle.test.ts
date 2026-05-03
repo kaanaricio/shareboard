@@ -220,6 +220,51 @@ describe("board lifecycle", () => {
     ]);
   });
 
+  test("keeps duplicated images at source size when that footprint fits", () => {
+    const file = new File(["x"], "avatar.png", { type: "image/png" });
+    const img = (id: string) => ({
+      id,
+      type: "image" as const,
+      file,
+      previewUrl: `blob:${id}`,
+      aspect: 1,
+    });
+    const page: BoardPage = {
+      id: "page",
+      items: ["a", "b", "source"].map(img),
+      layouts: {
+        lg: [
+          { i: "a", x: 0, y: 0, w: 8, h: 13 },
+          { i: "b", x: 8, y: 0, w: 8, h: 13 },
+          { i: "source", x: 0, y: 13, w: 5, h: 8 },
+        ],
+        sm: [],
+      },
+    };
+
+    const result = duplicateItemWithSpillToPages({
+      pages: [page],
+      activePage: 0,
+      id: "source",
+      maxRows: 21,
+      adapter: {
+        create() {
+          return "blob:copy";
+        },
+        revoke() {
+          throw new Error("not used");
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.landedIndex).toBe(0);
+    expect(result!.pages[0]!.layouts.lg.find((layout) => layout.i === result!.newId)).toMatchObject({
+      w: 5,
+      h: 8,
+    });
+  });
+
   test("spills a new item to the next page when the active page is full", () => {
     const fullPage: BoardPage = {
       id: "full",

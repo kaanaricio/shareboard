@@ -137,8 +137,81 @@ export function duplicateItemWithSpillToPages({
   const copy = isDraftImageItem(source)
     ? { ...source, id: newId, previewUrl: adapter.create(source.file) }
     : { ...source, id: newId };
+  if (source.type === "image") {
+    const exact = addImageDuplicateAtSourceSize({ pages, activePage, sourceId: id, item: copy, maxRows });
+    if (exact) return { ...exact, newId };
+  }
   const result = addItemWithSpillToPages({ pages, activePage, item: copy, maxRows });
   return { ...result, newId };
+}
+
+function addImageDuplicateAtSourceSize({
+  pages,
+  activePage,
+  sourceId,
+  item,
+  maxRows,
+}: {
+  pages: BoardPage[];
+  activePage: number;
+  sourceId: string;
+  item: CanvasItem;
+  maxRows: number;
+}): { pages: BoardPage[]; landedIndex: number } | null {
+  const active = pages[activePage];
+  const sourceLayout = active?.layouts.lg.find((layout) => layout.i === sourceId);
+  if (!active || !sourceLayout) return null;
+
+  const { x, y } = lowestOpenSlot(active.layouts.lg, sourceLayout.w, LG_COLS);
+  const candidate = {
+    ...sourceLayout,
+    i: item.id,
+    x,
+    y,
+    w: sourceLayout.w,
+    h: sourceLayout.h,
+  };
+  if (candidate.y + candidate.h > maxRows) return null;
+
+  const items = [...active.items, item];
+  const layouts = packPageLayouts(
+    items,
+    { ...active.layouts, lg: [...active.layouts.lg, candidate] },
+    maxRows,
+  );
+  const bottom = layouts.lg.reduce((max, layout) => Math.max(max, layout.y + layout.h), 0);
+  if (bottom > maxRows) return null;
+
+  const next = [...pages];
+  next[activePage] = { ...active, items, layouts };
+  return { pages: next, landedIndex: activePage };
+}
+
+function lowestOpenSlot(
+  layouts: GridLayouts["lg"],
+  width: number,
+  columns: number,
+): { x: number; y: number } {
+  const w = Math.max(1, Math.min(columns, width));
+  const skyline = new Array(columns).fill(0);
+  for (const layout of layouts) {
+    for (let k = 0; k < layout.w; k++) {
+      const col = layout.x + k;
+      if (col >= 0 && col < columns) skyline[col] = Math.max(skyline[col], layout.y + layout.h);
+    }
+  }
+
+  let bestX = 0;
+  let bestY = Number.POSITIVE_INFINITY;
+  for (let x = 0; x <= columns - w; x++) {
+    let y = 0;
+    for (let k = 0; k < w; k++) y = Math.max(y, skyline[x + k]);
+    if (y < bestY) {
+      bestX = x;
+      bestY = y;
+    }
+  }
+  return { x: bestX, y: Number.isFinite(bestY) ? bestY : 0 };
 }
 
 export function addItemWithSpillToPages({

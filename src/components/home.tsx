@@ -99,6 +99,13 @@ function cloneCanvasItem(item: CanvasItem): CanvasItem | null {
   return { ...item, id };
 }
 
+function mediaBytesForPages(pages: readonly BoardPage[]) {
+  return pages.reduce(
+    (n, p) => n + p.items.reduce((sum, item) => sum + (item.type === "image" ? item.size ?? 0 : 0), 0),
+    0,
+  );
+}
+
 type SelectionEvent = { metaKey?: boolean; ctrlKey?: boolean };
 
 export function Home() {
@@ -249,11 +256,7 @@ export function Home() {
     [pages]
   );
   const totalMediaBytes = useMemo(
-    () =>
-      pages.reduce(
-        (n, p) => n + p.items.reduce((sum, item) => sum + (item.type === "image" ? item.size ?? 0 : 0), 0),
-        0
-      ),
+    () => mediaBytesForPages(pages),
     [pages]
   );
   const hasItems = totalContentItems > 0;
@@ -471,6 +474,68 @@ export function Home() {
     [addItemWithSpill, totalMediaBytes]
   );
 
+  const addImages = useCallback(
+    async (files: File[]) => {
+      const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+      if (imageFiles.length === 0) return false;
+
+      const optimizedImages = [];
+      for (const file of imageFiles) {
+        try {
+          optimizedImages.push(await optimizeImageForShare(file));
+        } catch (error) {
+          notify.error(error instanceof Error ? error.message : "Could not add image");
+        }
+      }
+
+      let mediaBytes = mediaBytesForPages(pagesRef.current);
+      const items: CanvasItem[] = [];
+      for (const optimized of optimizedImages) {
+        if (mediaBytes + optimized.file.size > IMAGE_POLICY.maxBoardBytes) {
+          notify.error(`Boards can hold up to ${formatBytes(IMAGE_POLICY.maxBoardBytes)} of images`);
+          break;
+        }
+        mediaBytes += optimized.file.size;
+        items.push({
+          id: nanoid(10),
+          type: "image",
+          file: optimized.file,
+          previewUrl: URL.createObjectURL(optimized.file),
+          mimeType: optimized.file.type || undefined,
+          size: optimized.file.size,
+          aspect: optimized.aspect,
+        });
+      }
+
+      if (items.length === 0) return false;
+
+      let lastLandedIndex = activePage;
+      setPages((prev) => {
+        let nextPages = prev;
+        let landingPage = activePage;
+        for (const item of items) {
+          const result = addItemWithSpillToPages({
+            pages: nextPages,
+            activePage: landingPage,
+            item,
+            maxRows,
+          });
+          nextPages = result.pages;
+          landingPage = result.landedIndex;
+          lastLandedIndex = result.landedIndex;
+        }
+        return nextPages;
+      });
+      setSelectedIds(items.map((item) => item.id));
+      if (lastLandedIndex !== activePage) {
+        queueMicrotask(() => navigate({ search: { page: lastLandedIndex + 1 }, replace: false }));
+      }
+      notify.success(items.length === 1 ? "Image added" : `${items.length} images added`);
+      return true;
+    },
+    [activePage, maxRows, navigate],
+  );
+
   const addNote = useCallback(
     (text: string) => {
       const id = nanoid(10);
@@ -639,7 +704,7 @@ export function Home() {
       const files = Array.from(data.files);
       const imageFiles = files.filter((file) => file.type.startsWith("image/"));
       if (imageFiles.length > 0) {
-        void Promise.all(imageFiles.map((file) => addImage(file)));
+        void addImages(imageFiles);
         return;
       }
 
@@ -668,7 +733,7 @@ export function Home() {
         notify.success("Note added");
       }
     },
-    [needsSetup, addImage, addNote, addUrl]
+    [needsSetup, addImage, addImages, addNote, addUrl]
   );
 
   // Install the paste listener once on mount and route through a latest-handler
@@ -697,7 +762,7 @@ export function Home() {
       .filter((file): file is File => !!file);
     if (imageFilesFromItems.length > 0) {
       e.preventDefault();
-      void Promise.all(imageFilesFromItems.map((file) => addImage(file)));
+      void addImages(imageFilesFromItems);
       return;
     }
 
@@ -705,7 +770,7 @@ export function Home() {
       e.preventDefault();
       const imageFiles = Array.from(clipboard.files).filter((file) => file.type.startsWith("image/"));
       if (imageFiles.length > 0) {
-        void Promise.all(imageFiles.map((file) => addImage(file)));
+        void addImages(imageFiles);
       } else {
         notify.error("Only images can be pasted into a board");
       }
