@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   __boardLifecyclePolicyForTests,
   addItemWithSpillToPages,
-  duplicateItemOnPage,
+  duplicateItemWithSpillToPages,
   editorPagesFromCanvas,
   emptyBoardPage,
   removeItemsFromPage,
@@ -121,20 +121,103 @@ describe("board lifecycle", () => {
       layouts: { lg: [], sm: [] },
     };
     const created: string[] = [];
-    const result = duplicateItemOnPage(page, "img", 100, {
-      create(file) {
-        created.push(file.name);
-        return "blob:new";
-      },
-      revoke() {
-        throw new Error("not used");
+    const result = duplicateItemWithSpillToPages({
+      pages: [page],
+      activePage: 0,
+      id: "img",
+      maxRows: 100,
+      adapter: {
+        create(file) {
+          created.push(file.name);
+          return "blob:new";
+        },
+        revoke() {
+          throw new Error("not used");
+        },
       },
     });
 
     expect(result).not.toBeNull();
     expect(created).toEqual(["x.png"]);
-    const duplicated = result!.page.items.find((item) => item.id === result!.newId);
+    expect(result!.landedIndex).toBe(0);
+    const duplicated = result!.pages[0]!.items.find((item) => item.id === result!.newId);
     expect(duplicated).toMatchObject({ type: "image", previewUrl: "blob:new" });
+  });
+
+  test("shrinks duplicated images into real gaps, then spills instead of repacking the page", () => {
+    const file = new File(["x"], "avatar.png", { type: "image/png" });
+    const img = (id: string) => ({
+      id,
+      type: "image" as const,
+      file,
+      previewUrl: `blob:${id}`,
+      aspect: 1,
+    });
+    const page: BoardPage = {
+      id: "page",
+      items: ["a", "b", "c", "d", "e", "f", "g"].map(img),
+      layouts: {
+        lg: [
+          { i: "a", x: 0, y: 0, w: 8, h: 13 },
+          { i: "b", x: 8, y: 0, w: 8, h: 13 },
+          { i: "c", x: 16, y: 0, w: 8, h: 13 },
+          { i: "d", x: 0, y: 13, w: 5, h: 8 },
+          { i: "e", x: 5, y: 13, w: 5, h: 8 },
+          { i: "f", x: 10, y: 13, w: 5, h: 8 },
+          { i: "g", x: 15, y: 13, w: 5, h: 8 },
+        ],
+        sm: [],
+      },
+    };
+
+    const first = duplicateItemWithSpillToPages({
+      pages: [page],
+      activePage: 0,
+      id: "g",
+      maxRows: 21,
+      adapter: {
+        create() {
+          return "blob:copy";
+        },
+        revoke() {
+          throw new Error("not used");
+        },
+      },
+    });
+
+    expect(first).not.toBeNull();
+    expect(first!.landedIndex).toBe(0);
+    expect(first!.pages).toHaveLength(1);
+    expect(first!.pages[0]!.items).toHaveLength(8);
+    expect(first!.pages[0]!.layouts.lg.find((layout) => layout.i === first!.newId)).toMatchObject({
+      x: 20,
+      y: 13,
+      w: 4,
+      h: 6,
+    });
+
+    const second = duplicateItemWithSpillToPages({
+      pages: first!.pages,
+      activePage: 0,
+      id: first!.newId,
+      maxRows: 21,
+      adapter: {
+        create() {
+          return "blob:copy-2";
+        },
+        revoke() {
+          throw new Error("not used");
+        },
+      },
+    });
+
+    expect(second).not.toBeNull();
+    expect(second!.landedIndex).toBe(1);
+    expect(second!.pages).toHaveLength(2);
+    expect(second!.pages[0]!.layouts.lg).toEqual(first!.pages[0]!.layouts.lg);
+    expect(second!.pages[1]!.items).toEqual([
+      expect.objectContaining({ id: second!.newId, type: "image", previewUrl: "blob:copy-2" }),
+    ]);
   });
 
   test("spills a new item to the next page when the active page is full", () => {

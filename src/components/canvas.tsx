@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState, useRef } from "react";
+import { useMemo, useCallback, useState, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { X } from "lucide-react";
 import type { CanvasItem, GenerateResponse, GridLayouts } from "@/lib/types";
 import { UrlCard } from "./url-card";
@@ -28,12 +28,21 @@ function isTwitterItem(item: CanvasItem): boolean {
   return item.type === "url" && item.platform === "twitter";
 }
 
+function blurActiveElementSoon() {
+  const blur = () => (document.activeElement as HTMLElement | null)?.blur();
+  blur();
+  requestAnimationFrame(blur);
+}
+
+type SelectionEvent = { metaKey?: boolean; ctrlKey?: boolean };
+
 export function Canvas({
   items,
   generation,
   layouts,
   selectedIds,
   onSelect,
+  onSelectMany,
   onLayoutChange,
   onRemove,
   onDropData,
@@ -52,7 +61,8 @@ export function Canvas({
   /** Row budget for the lg breakpoint — must match layout generation in tile-specs. */
   maxRows: number;
   selectedIds?: string[];
-  onSelect?: (id: string | null, e?: React.MouseEvent) => void;
+  onSelect?: (id: string | null, e?: SelectionEvent) => void;
+  onSelectMany?: (ids: string[], additive: boolean) => void;
   onLayoutChange?: (layouts: GridLayouts) => void;
   onRemove?: (id: string) => void;
   onDropData?: (data: DataTransfer) => void;
@@ -66,10 +76,20 @@ export function Canvas({
   const acceptDrop = acceptExternalDrop !== false;
   const isMobile = useIsMobile();
   const [isDragOver, setIsDragOver] = useState(false);
+  const [lasso, setLasso] = useState<{
+    startX: number;
+    startY: number;
+    x: number;
+    y: number;
+  } | null>(null);
   // Readonly-only: tapping an image opens a fullscreen lightbox. In the editor
   // a tap means "select", so we never open the lightbox there.
   const [lightbox, setLightbox] = useState<{ src: string; alt?: string } | null>(null);
   const dragCountRef = useRef(0);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const lassoAdditiveRef = useRef(false);
+  const lassoBaseSelectionRef = useRef<string[]>([]);
+  const lassoDidDragRef = useRef(false);
 
   // Persisted aspect cache — tweets that have been seen in any board on this
   // device place correctly on first paint on the next visit.
@@ -79,11 +99,13 @@ export function Canvas({
   // callback without resubscribing.
   const onMaxRowsChangeRef = useRef(onMaxRowsChange);
   onMaxRowsChangeRef.current = onMaxRowsChange;
+  const lastMaxRowsRef = useRef<number | null>(null);
 
   // Callback ref: wire up a ResizeObserver when the outer container mounts,
   // tear it down when it unmounts. AutoCanvas measures its own inner width
   // separately via useContainerWidth.
   const containerRef = useCallback((el: HTMLDivElement | null) => {
+    rootRef.current = el;
     if (!el) return;
     const calc = () => {
       const rect = el.getBoundingClientRect();
@@ -94,7 +116,10 @@ export function Canvas({
       const padBottom = parseFloat(cs.paddingBottom) || 0;
       const innerH = rect.height - padTop - padBottom;
       const rows = Math.max(4, Math.floor((innerH + MARGIN) / (ROW_HEIGHT + MARGIN)));
-      onMaxRowsChangeRef.current?.(rows);
+      if (rows !== lastMaxRowsRef.current) {
+        lastMaxRowsRef.current = rows;
+        onMaxRowsChangeRef.current?.(rows);
+      }
     };
     calc();
     const ro = new ResizeObserver(calc);
@@ -141,8 +166,86 @@ export function Canvas({
   const getSummary = (id: string) =>
     generation?.item_summaries.find((s) => s.item_id === id);
 
+  const selectItemsInLasso = useCallback(
+    (box: { startX: number; startY: number; x: number; y: number }) => {
+      const root = rootRef.current;
+      if (!root || !onSelectMany) return;
+      const rootRect = root.getBoundingClientRect();
+      const lassoRect = {
+        left: rootRect.left + Math.min(box.startX, box.x),
+        right: rootRect.left + Math.max(box.startX, box.x),
+        top: rootRect.top + Math.min(box.startY, box.y),
+        bottom: rootRect.top + Math.max(box.startY, box.y),
+      };
+      const ids = Array.from(root.querySelectorAll<HTMLElement>("[data-canvas-item-id]"))
+        .filter((node) => {
+          const rect = node.getBoundingClientRect();
+          return (
+            rect.left < lassoRect.right &&
+            rect.right > lassoRect.left &&
+            rect.top < lassoRect.bottom &&
+            rect.bottom > lassoRect.top
+          );
+        })
+        .map((node) => node.dataset.canvasItemId)
+        .filter((id): id is string => !!id);
+      const finalIds = lassoAdditiveRef.current
+        ? [...new Set([...lassoBaseSelectionRef.current, ...ids])]
+        : ids;
+      onSelectMany(finalIds, false);
+    },
+    [onSelectMany],
+  );
+
+  const handlePointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (readonly || isMobile || e.button !== 0 || !onSelectMany) return;
+      const target = e.target as HTMLElement;
+      const interactive = target.closest(
+        "[data-canvas-item-id], .react-grid-item, button, input, textarea, [contenteditable=true]",
+      );
+      if (interactive) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const startX = e.clientX - rect.left;
+      const startY = e.clientY - rect.top;
+      lassoAdditiveRef.current = e.metaKey || e.ctrlKey;
+      lassoBaseSelectionRef.current = selectedIds ?? [];
+      lassoDidDragRef.current = false;
+      setLasso({ startX, startY, x: startX, y: startY });
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    [isMobile, onSelectMany, readonly, selectedIds],
+  );
+
+  const handlePointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (!lasso) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const next = { ...lasso, x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const moved = Math.abs(next.x - next.startX) > 4 || Math.abs(next.y - next.startY) > 4;
+      if (moved) {
+        lassoDidDragRef.current = true;
+        setLasso(next);
+        selectItemsInLasso(next);
+      }
+    },
+    [lasso, selectItemsInLasso],
+  );
+
+  const endLasso = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!lasso) return;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    setLasso(null);
+  }, [lasso]);
+
   const handleBackgroundClick = useCallback(
     (e: React.MouseEvent) => {
+      if (lassoDidDragRef.current) {
+        lassoDidDragRef.current = false;
+        return;
+      }
       const target = e.target as HTMLElement;
       const isBackground =
         e.target === e.currentTarget ||
@@ -244,6 +347,10 @@ export function Canvas({
       data-share-preview-root
       className={containerClass}
       onClick={handleBackgroundClick}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={endLasso}
+      onPointerCancel={endLasso}
       onDragEnter={acceptDrop ? handleDragEnter : undefined}
       onDragLeave={acceptDrop ? handleDragLeave : undefined}
       onDragOver={acceptDrop ? handleDragOver : undefined}
@@ -253,6 +360,17 @@ export function Canvas({
         <div className="absolute inset-3 md:inset-5 z-50 flex items-center justify-center bg-black/5 backdrop-blur-sm rounded-3xl pointer-events-none">
           <p className="text-lg font-medium text-foreground/60">Drop to add</p>
         </div>
+      )}
+      {lasso && (
+        <div
+          className="canvas-lasso"
+          style={{
+            left: Math.min(lasso.startX, lasso.x),
+            top: Math.min(lasso.startY, lasso.y),
+            width: Math.abs(lasso.x - lasso.startX),
+            height: Math.abs(lasso.y - lasso.startY),
+          }}
+        />
       )}
       {isEmpty
         ? !hideEmptyState && (
@@ -300,12 +418,19 @@ export function Canvas({
                 <div
                   key={item.id}
                   className="board-mobile-stack-item group"
+                  data-canvas-item-id={item.id}
                   data-item-type={item.type}
                   style={aspect ? { aspectRatio: String(aspect) } : undefined}
                   onClick={(e) => {
                     if (readonly && item.type === "image") {
                       const src = "url" in item ? item.url : item.previewUrl;
                       if (src) setLightbox({ src, alt: item.caption });
+                      return;
+                    }
+                    if (e.metaKey || e.ctrlKey) {
+                      blurActiveElementSoon();
+                      e.preventDefault();
+                      onSelect?.(item.id, e);
                       return;
                     }
                     const target = e.target as HTMLElement | null;
@@ -352,12 +477,27 @@ export function Canvas({
             {items.map((item) => (
               <div
                 key={item.id}
+                data-canvas-item-id={item.id}
                 className={`group overflow-hidden rounded-lg ${selectedIds?.includes(item.id) ? "ring-2 ring-primary/40 ring-offset-2 ring-offset-background" : ""} ${readonly && item.type === "image" ? "cursor-zoom-in" : ""}`}
+                onMouseDownCapture={(e) => {
+                  if (!readonly && (e.metaKey || e.ctrlKey)) {
+                    blurActiveElementSoon();
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onSelect?.(item.id, e);
+                  }
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (readonly && item.type === "image") {
                     const src = "url" in item ? item.url : item.previewUrl;
                     if (src) setLightbox({ src, alt: item.caption });
+                    return;
+                  }
+                  if (e.metaKey || e.ctrlKey) {
+                    blurActiveElementSoon();
+                    e.preventDefault();
+                    onSelect?.(item.id, e);
                     return;
                   }
                   const target = e.target as HTMLElement | null;

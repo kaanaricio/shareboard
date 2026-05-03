@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo, useEffect, type MouseEvent } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { useMountEffect } from "@/lib/use-mount-effect";
 import { nanoid } from "nanoid";
 import { useNavigate, useSearch } from "@tanstack/react-router";
@@ -23,7 +23,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Check, Copy, Download, Loader2, Save, Share2 } from "lucide-react";
 import {
   addItemWithSpillToPages,
-  duplicateItemOnPage,
+  duplicateItemWithSpillToPages,
   editorPagesFromCanvas,
   emptyBoardPage,
   packPageLayouts,
@@ -86,6 +86,21 @@ function findSharedUrl(types: readonly string[], get: (type: string) => string) 
   return anchor?.href && isValidUrl(anchor.href) ? anchor.href : null;
 }
 
+function looksLikeImageFilename(text: string) {
+  return /^[^/\n\r]+\.(?:avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)$/i.test(text.trim());
+}
+
+function cloneCanvasItem(item: CanvasItem): CanvasItem | null {
+  if (item.id === BOARD_SUMMARY_ITEM_ID || item.type === "board_summary") return null;
+  const id = nanoid(10);
+  if (isDraftImageItem(item)) {
+    return { ...item, id, previewUrl: URL.createObjectURL(item.file) };
+  }
+  return { ...item, id };
+}
+
+type SelectionEvent = { metaKey?: boolean; ctrlKey?: boolean };
+
 export function Home() {
   const navigate = useNavigate({ from: "/" });
   const search = useSearch({ from: "/" });
@@ -108,6 +123,7 @@ export function Home() {
   const [saveState, setSaveState] = useState<"saved" | "saving" | "save">("saved");
   const lastSavedSigRef = useRef<string>("");
   const lockedDisposeRef = useRef<(() => void) | null>(null);
+  const canvasClipboardRef = useRef<CanvasItem[]>([]);
   // Keep latest pages in a ref so the unmount blob-URL cleanup can walk them
   // without being a dep of the mount effect. Assignment during render is safe —
   // it doesn't trigger renders.
@@ -501,14 +517,61 @@ export function Home() {
   const duplicateItem = useCallback(
     (pageIndex: number, id: string) => {
       if (id === BOARD_SUMMARY_ITEM_ID) return;
-      patchPage(pageIndex, (page) => {
-        const result = duplicateItemOnPage(page, id, maxRows);
-        if (!result) return page;
-        setSelectedIds([result.newId]);
-        return result.page;
+      let landedIndex = pageIndex;
+      let newId: string | null = null;
+      setPages((prev) => {
+        const result = duplicateItemWithSpillToPages({
+          pages: prev,
+          activePage: pageIndex,
+          id,
+          maxRows,
+        });
+        if (!result) return prev;
+        landedIndex = result.landedIndex;
+        newId = result.newId;
+        return result.pages;
       });
+      if (newId) setSelectedIds([newId]);
+      if (landedIndex !== pageIndex) {
+        queueMicrotask(() => navigate({ search: { page: landedIndex + 1 }, replace: false }));
+      }
     },
-    [patchPage, maxRows]
+    [maxRows, navigate]
+  );
+
+  const pasteCanvasItems = useCallback(
+    (items: CanvasItem[]) => {
+      const copies = items.map(cloneCanvasItem).filter((item): item is CanvasItem => !!item);
+      if (copies.length === 0) return false;
+
+      let lastLandedIndex = activePage;
+      let nextSelectedIds: string[] = [];
+      setPages((prev) => {
+        let nextPages = prev;
+        let landingPage = activePage;
+        const pastedIds: string[] = [];
+        for (const item of copies) {
+          const result = addItemWithSpillToPages({
+            pages: nextPages,
+            activePage: landingPage,
+            item,
+            maxRows,
+          });
+          nextPages = result.pages;
+          landingPage = result.landedIndex;
+          lastLandedIndex = result.landedIndex;
+          pastedIds.push(item.id);
+        }
+        nextSelectedIds = pastedIds;
+        return nextPages;
+      });
+      setSelectedIds(nextSelectedIds);
+      if (lastLandedIndex !== activePage) {
+        queueMicrotask(() => navigate({ search: { page: lastLandedIndex + 1 }, replace: false }));
+      }
+      return true;
+    },
+    [activePage, maxRows, navigate],
   );
 
   const updateNoteText = useCallback(
@@ -520,15 +583,6 @@ export function Home() {
     },
     [patchPage]
   );
-
-  const addPage = useCallback(() => {
-    setPages((prev) => {
-      const next = [...prev, emptyBoardPage()];
-      // Defer navigation until after state commits so router sees the new length.
-      queueMicrotask(() => navigate({ search: { page: next.length }, replace: false }));
-      return next;
-    });
-  }, [navigate]);
 
   const generate = useCallback(async () => {
     if (!getApiKey().trim()) {
@@ -648,7 +702,12 @@ export function Home() {
 
     if (clipboard.files.length > 0) {
       e.preventDefault();
-      notify.error("Only images can be pasted into a board");
+      const imageFiles = Array.from(clipboard.files).filter((file) => file.type.startsWith("image/"));
+      if (imageFiles.length > 0) {
+        void Promise.all(imageFiles.map((file) => addImage(file)));
+      } else {
+        notify.error("Only images can be pasted into a board");
+      }
       return;
     }
 
@@ -670,12 +729,17 @@ export function Home() {
     }
 
     if (!text) return;
+    if (looksLikeImageFilename(text)) {
+      e.preventDefault();
+      notify.error("Paste the image data or drop the file onto the board");
+      return;
+    }
     e.preventDefault();
     addNote(text);
     notify.success("Note added");
   };
 
-  const handleCanvasSelect = useCallback((id: string | null, e?: MouseEvent) => {
+  const handleCanvasSelect = useCallback((id: string | null, e?: SelectionEvent) => {
     if (id === null) {
       setSelectedIds([]);
       return;
@@ -690,6 +754,15 @@ export function Home() {
     } else {
       setSelectedIds([id]);
     }
+  }, []);
+
+  const handleCanvasSelectMany = useCallback((ids: string[], additive: boolean) => {
+    setSelectedIds((prev) => {
+      if (!additive) return ids;
+      const next = new Set(prev);
+      for (const id of ids) next.add(id);
+      return [...next];
+    });
   }, []);
 
   // Same latest-handler ref pattern for keydown shortcuts.
@@ -732,7 +805,28 @@ export function Home() {
 
     if (needsSetup) return;
 
+    const key = e.key.toLowerCase();
+
+    if ((e.metaKey || e.ctrlKey) && key === "v") {
+      if (canvasClipboardRef.current.length === 0) return;
+      e.preventDefault();
+      if (pasteCanvasItems(canvasClipboardRef.current)) notify.success("Pasted");
+      return;
+    }
+
     if (selectedIds.length === 0) return;
+
+    if ((e.metaKey || e.ctrlKey) && key === "c") {
+      e.preventDefault();
+      const selected = itemsOnActive.filter(
+        (item) => selectedIds.includes(item.id) && item.type !== "board_summary",
+      );
+      canvasClipboardRef.current = selected;
+      if (selected.length > 0) {
+        notify.success(selected.length > 1 ? "Copied items" : "Copied item");
+      }
+      return;
+    }
 
     if (e.key === "Backspace" || e.key === "Delete") {
       e.preventDefault();
@@ -758,27 +852,9 @@ export function Home() {
     const selected = itemsOnActive.find((i) => i.id === one);
     if (!selected) return;
 
-    if ((e.metaKey || e.ctrlKey) && e.key === "d") {
+    if ((e.metaKey || e.ctrlKey) && key === "d") {
       e.preventDefault();
       duplicateItem(activePage, one);
-      return;
-    }
-
-    if ((e.metaKey || e.ctrlKey) && e.key === "c") {
-      e.preventDefault();
-      let text = "";
-      if (selected.type === "url") text = selected.url;
-      else if (selected.type === "note") text = selected.text;
-      else if (selected.type === "board_summary") {
-        text =
-          generation?.overall_summary.explanation?.trim() ||
-          generation?.overall_summary.title ||
-          "";
-      } else if (selected.type === "image")
-        text = isDraftImageItem(selected) ? selected.caption ?? selected.file.name : selected.url;
-      void copyText(text).then((copied) =>
-        copied ? notify.success("Copied") : notify.error("Couldn't copy")
-      );
       return;
     }
 
@@ -888,6 +964,7 @@ export function Home() {
             maxRows={maxRows}
             selectedIds={isActive ? selectedIds : undefined}
             onSelect={isActive ? handleCanvasSelect : undefined}
+            onSelectMany={isActive ? handleCanvasSelectMany : undefined}
             onLayoutChange={(next) => patchPage(i, { layouts: next })}
             onRemove={(id) => removeItem(i, id)}
             onDropData={isActive ? handleDropData : undefined}
@@ -909,9 +986,7 @@ export function Home() {
         history={history}
         openingEntryId={openingEntryId}
         onChangePage={setActivePage}
-        onAddPage={addPage}
         onAddImage={(file) => void addImage(file)}
-        onAddNote={addNote}
         onPasteLink={openPasteDialog}
         onImport={openImportDialog}
         onGenerate={generate}
@@ -1014,16 +1089,16 @@ export function Home() {
       </Dialog>
 
       <Dialog open={pasteDialogOpen} onOpenChange={setPasteDialogOpen}>
-        <DialogContent className="sm:max-w-[420px]">
+        <DialogContent className="paste-dialog sm:max-w-[420px]">
           <DialogHeader>
             <DialogTitle>Add link or note</DialogTitle>
             <DialogDescription>
-              Paste a URL or type a quick note. URLs auto-detect their platform.
+              Paste a URL or write a note.
             </DialogDescription>
           </DialogHeader>
           <textarea
             autoFocus
-            placeholder="https://… or type a note"
+            placeholder="https://... or type a note"
             value={pasteInput}
             onChange={(e) => setPasteInput(e.target.value)}
             onKeyDown={(e) => {
@@ -1033,9 +1108,9 @@ export function Home() {
               }
             }}
             rows={4}
-            className="setup-dialog-tile-input resize-none"
+            className="paste-dialog-input"
           />
-          <DialogFooter className="mt-2">
+          <DialogFooter className="paste-dialog-footer">
             <DialogClose render={<Button type="button" variant="outline" />}>Cancel</DialogClose>
             <Button type="button" onClick={submitPasteDialog} disabled={!pasteInput.trim()}>
               Add

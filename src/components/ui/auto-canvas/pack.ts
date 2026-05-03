@@ -249,13 +249,9 @@ export function mergeLayout(
     }
   }
 
-  // Pack new (non-persisted) tiles. Aspect-locked tiles try the preferred span
-  // first, then progressively smaller spans, picking the largest one whose
-  // skyline placement still fits within the row budget. This means a hoodie
-  // pasted into a tight gap shrinks to fit (preserving aspect) rather than
-  // shooting past the canvas bottom. If even minSpan won't fit, we still place
-  // it at minSpan; the caller (addItemWithSpill in home.tsx) sees the overflow
-  // via tentativeBottom > maxRows and spills to the next page.
+  // Pack new (non-persisted) tiles. Aspect-locked tiles may shrink into a
+  // real leftover gap, but if even the minimum footprint overflows, callers
+  // see tentativeBottom > maxRows and spill to the next page.
   for (const spec of specs) {
     if (persistedById.has(spec.id)) continue;
     const placement = placeFresh(spec, skyline, options);
@@ -277,17 +273,6 @@ export function mergeLayout(
 
   // Drop any persisted positions for specs that no longer exist.
   const final = kept.filter((l) => specById.has(l.i));
-
-  // If the merged layout overflows the row budget, the persisted arrangement
-  // can't accommodate the new set of tiles. Re-pack from scratch so content
-  // stays inside the viewport — users may lose custom positions, but they'll
-  // never see cards clipped off-screen by the canvas's overflow-hidden.
-  if (options.maxRows && options.maxRows > 0) {
-    const bottom = final.reduce((m, l) => Math.max(m, l.y + l.h), 0);
-    if (bottom > options.maxRows) {
-      return packLayout(specs, options);
-    }
-  }
 
   return final;
 }
@@ -320,11 +305,8 @@ function lowestPlacement(
  * Pick a placement for a fresh (non-persisted) tile.
  *
  * Aspect-locked tiles adaptively shrink: try preferredSpan, then step down to
- * minSpan, and keep the largest span whose `y + h` fits in `maxRows`. Smaller
- * w → proportionally smaller h, so a tall portrait that doesn't fit at span=8
- * may still fit at span=4. If nothing fits, return the minSpan placement and
- * let the caller decide whether to spill (non-empty page) or accept overflow
- * (single-tile empty page).
+ * minSpan, and keep the largest one whose placement still fits in maxRows. If
+ * nothing fits, return the minSpan placement and let the caller spill.
  *
  * Flex tiles use the original chooseSpan/chooseRows result.
  */
@@ -343,7 +325,6 @@ function placeFresh(
       const { x, y } = lowestPlacement(skyline, w, columns);
       if (y + h <= maxRows) return { x, y, w, h };
     }
-    // Nothing fits — fall through to minSpan placement (overflow allowed).
     const w = minSpan;
     const h = chooseRows(spec, w, options);
     const { x, y } = lowestPlacement(skyline, w, columns);

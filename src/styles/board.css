@@ -49,6 +49,16 @@
   z-index: 20;
 }
 
+.canvas-lasso {
+  position: absolute;
+  z-index: 60;
+  pointer-events: none;
+  border: 1px solid rgba(10, 10, 10, 0.42);
+  border-radius: 0.5rem;
+  background-color: rgba(10, 10, 10, 0.08);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.72) inset;
+}
+
 /* ─── Top-right corner notch ──────────────────────────────────────────
  * Anchored flush to the viewport's top-right corner with only the
  * bottom-left corner rounded so it reads as a status-bar/notch element
@@ -366,6 +376,43 @@
   align-items: center;
   justify-content: center;
   will-change: transform;
+}
+
+.paste-dialog {
+  gap: 0.875rem;
+  border-radius: 1.25rem;
+  padding: 1rem;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 20px 60px -24px rgba(0, 0, 0, 0.32);
+}
+
+.paste-dialog-input {
+  min-height: 8.5rem;
+  width: 100%;
+  resize: none;
+  border-radius: 0.875rem;
+  border: 1px solid rgba(10, 10, 10, 0.1);
+  background-color: rgba(245, 245, 240, 0.58);
+  padding: 0.875rem;
+  color: var(--foreground);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+  outline: none;
+}
+
+.paste-dialog-input::placeholder {
+  color: rgba(10, 10, 10, 0.36);
+}
+
+.paste-dialog-input:focus {
+  border-color: rgba(10, 10, 10, 0.22);
+  background-color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(10, 10, 10, 0.06);
+}
+
+.paste-dialog-footer {
+  margin-top: 0;
 }
 
 /* Subtle press feedback on the trigger when the fan is open */

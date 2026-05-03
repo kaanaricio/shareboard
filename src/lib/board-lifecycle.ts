@@ -117,24 +117,28 @@ export function removeItemsFromPage(
   return removeItemsFromPageState(page, ids);
 }
 
-export function duplicateItemOnPage(
-  page: BoardPage,
-  id: string,
-  maxRows: number,
-  adapter: PreviewUrlAdapter = browserPreviewUrlAdapter,
-): { page: BoardPage; newId: string } | null {
+export function duplicateItemWithSpillToPages({
+  pages,
+  activePage,
+  id,
+  maxRows,
+  adapter = browserPreviewUrlAdapter,
+}: {
+  pages: BoardPage[];
+  activePage: number;
+  id: string;
+  maxRows: number;
+  adapter?: PreviewUrlAdapter;
+}): { pages: BoardPage[]; landedIndex: number; newId: string } | null {
   if (id === BOARD_SUMMARY_ITEM_ID) return null;
-  const source = page.items.find((item) => item.id === id);
+  const source = pages[activePage]?.items.find((item) => item.id === id);
   if (!source || source.type === "board_summary") return null;
   const newId = nanoid(10);
   const copy = isDraftImageItem(source)
     ? { ...source, id: newId, previewUrl: adapter.create(source.file) }
     : { ...source, id: newId };
-  const items = [...page.items, copy];
-  return {
-    newId,
-    page: { ...page, items, layouts: packPageLayouts(items, page.layouts, maxRows) },
-  };
+  const result = addItemWithSpillToPages({ pages, activePage, item: copy, maxRows });
+  return { ...result, newId };
 }
 
 export function addItemWithSpillToPages({

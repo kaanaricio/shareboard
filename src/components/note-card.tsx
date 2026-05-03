@@ -1,4 +1,5 @@
 
+import { useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -17,6 +18,8 @@ export function NoteCard({
   readonly?: boolean;
   onUpdateText?: (id: string, text: string) => void;
 }) {
+  const lastTextRef = useRef(item.text);
+  lastTextRef.current = item.text;
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -26,7 +29,10 @@ export function NoteCard({
     editable: !readonly,
     immediatelyRender: false,
     onUpdate: ({ editor }) => {
-      onUpdateText?.(item.id, editor.getHTML());
+      const html = editor.getHTML();
+      if (html === lastTextRef.current) return;
+      lastTextRef.current = html;
+      onUpdateText?.(item.id, html);
     },
     editorProps: {
       attributes: {

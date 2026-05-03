@@ -185,7 +185,7 @@ describe("mergeLayout", () => {
     // New tile should tuck next to old (x=12, y=0), not below (y=6).
     expect(newTile).toMatchObject({ x: 12, y: 0 });
   });
-  test("falls back to packLayout (losing persisted positions) when merge would overflow maxRows", () => {
+  test("preserves persisted positions and reports overflow when a merge cannot fit", () => {
     // Simulate a canvas that's already at the row budget, then add one more tile.
     const persisted = [
       { i: "a", x: 0, y: 0, w: 12, h: 5 },
@@ -205,7 +205,9 @@ describe("mergeLayout", () => {
       { ...OPTS, maxRows: 10 },
     );
     const bottom = merged.reduce((m, l) => Math.max(m, l.y + l.h), 0);
-    expect(bottom).toBeLessThanOrEqual(10);
+    expect(bottom).toBeGreaterThan(10);
+    expect(merged.find((l) => l.i === "a")).toMatchObject({ x: 0, y: 0, w: 12, h: 5 });
+    expect(merged.find((l) => l.i === "d")).toMatchObject({ x: 12, y: 5, w: 12, h: 5 });
     expect(merged.map((l) => l.i).sort()).toEqual(["a", "b", "c", "d", "e"]);
   });
   test("drops stale persisted ids that no longer exist in specs", () => {

@@ -8,7 +8,6 @@ import {
   Check,
   Clock3,
   ImagePlus,
-  Type,
   Sparkles,
   LockKeyhole,
   Settings,
@@ -20,7 +19,6 @@ import {
   Pencil,
   FilePlus,
   ClipboardPaste,
-  FileStack,
 } from "lucide-react";
 import { copyText } from "@/lib/clipboard";
 import { notify } from "@/lib/toast";
@@ -41,9 +39,7 @@ export function Toolbar({
   history,
   openingEntryId,
   onChangePage,
-  onAddPage,
   onAddImage,
-  onAddNote,
   onPasteLink,
   onImport,
   onGenerate,
@@ -61,9 +57,7 @@ export function Toolbar({
   history: BoardHistoryEntry[];
   openingEntryId: string | null;
   onChangePage: (next: number) => void;
-  onAddPage: () => void;
   onAddImage: (file: File) => void;
-  onAddNote: (text: string) => void;
   onPasteLink: () => void;
   onImport: () => void;
   onGenerate: () => void;
@@ -109,24 +103,10 @@ export function Toolbar({
       icon: <ClipboardPaste className="h-4 w-4" />,
       onClick: onPasteLink,
     },
-    // Inline-create on desktop (faster than opening the paste dialog).
-    // On mobile it's redundant with "Paste link or note", so it's hidden.
-    ...(isMobile
-      ? []
-      : [{
-          label: "Text note",
-          icon: <Type className="h-4 w-4" />,
-          onClick: () => onAddNote(""),
-        } satisfies ActionFanItem]),
     {
       label: "Upload image",
       icon: <ImagePlus className="h-4 w-4" />,
       onClick: () => fileRef.current?.click(),
-    },
-    {
-      label: "New page",
-      icon: <FileStack className="h-4 w-4" />,
-      onClick: onAddPage,
     },
     {
       label: "Import shared board",
@@ -401,7 +381,7 @@ export function Toolbar({
             triggerClassName="board-toolbar-add"
             trigger={<Plus className="h-5 w-5" strokeWidth={2.25} />}
             items={fanItems}
-            radius={isMobile ? 108 : 96}
+            radius={isMobile ? 124 : 96}
           />
         </div>
 
