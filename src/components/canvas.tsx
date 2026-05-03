@@ -494,6 +494,7 @@ export function Canvas({
             layout={layouts}
             onLayoutChange={handleAutoLayoutChange}
             readonly={readonly}
+            selectedIds={selectedIds}
           >
             {items.map((item) => (
               <div

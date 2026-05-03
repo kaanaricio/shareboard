@@ -9,6 +9,7 @@ import {
   packSkyline,
   pxToRows,
   resolveDisplacedLayout,
+  resolveGroupedDragLayout,
   rowsToPx,
 } from "./pack";
 import type { TileSpec } from "./types";
@@ -430,6 +431,55 @@ describe("resolveDisplacedLayout", () => {
     const resolved = resolveDisplacedLayout(next, before, "a", { columns: 24 });
 
     expect(resolved?.find((item) => item.i === "b")).toMatchObject({ x: 0, y: 0 });
+  });
+});
+
+describe("resolveGroupedDragLayout", () => {
+  test("moves selected items together while preserving relative positions", () => {
+    const before = [
+      { i: "a", x: 0, y: 0, w: 6, h: 6 },
+      { i: "b", x: 6, y: 0, w: 6, h: 6 },
+      { i: "c", x: 18, y: 0, w: 6, h: 6 },
+    ];
+    const next = [
+      { i: "a", x: 3, y: 4, w: 6, h: 6 },
+      { i: "b", x: 6, y: 0, w: 6, h: 6 },
+      { i: "c", x: 18, y: 0, w: 6, h: 6 },
+    ];
+
+    const resolved = resolveGroupedDragLayout(next, before, "a", ["a", "b"], { columns: 24, maxRows: 12 });
+
+    expect(resolved?.find((item) => item.i === "a")).toMatchObject({ x: 3, y: 4 });
+    expect(resolved?.find((item) => item.i === "b")).toMatchObject({ x: 9, y: 4 });
+    expect(resolved?.find((item) => item.i === "c")).toMatchObject({ x: 18, y: 0 });
+  });
+
+  test("rejects grouped moves that collide with unselected cards", () => {
+    const before = [
+      { i: "a", x: 0, y: 0, w: 6, h: 6 },
+      { i: "b", x: 6, y: 0, w: 6, h: 6 },
+      { i: "c", x: 12, y: 0, w: 6, h: 6 },
+    ];
+    const next = [
+      { i: "a", x: 6, y: 0, w: 6, h: 6 },
+      { i: "b", x: 6, y: 0, w: 6, h: 6 },
+      { i: "c", x: 12, y: 0, w: 6, h: 6 },
+    ];
+
+    expect(resolveGroupedDragLayout(next, before, "a", ["a", "b"], { columns: 24, maxRows: 12 })).toBeNull();
+  });
+
+  test("rejects grouped moves outside the row budget", () => {
+    const before = [
+      { i: "a", x: 0, y: 0, w: 6, h: 6 },
+      { i: "b", x: 6, y: 0, w: 6, h: 6 },
+    ];
+    const next = [
+      { i: "a", x: 0, y: 7, w: 6, h: 6 },
+      { i: "b", x: 6, y: 0, w: 6, h: 6 },
+    ];
+
+    expect(resolveGroupedDragLayout(next, before, "a", ["a", "b"], { columns: 24, maxRows: 12 })).toBeNull();
   });
 });
 

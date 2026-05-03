@@ -380,6 +380,33 @@ export function resolveDisplacedLayout(
   return layoutIsValid(result, options) ? result : null;
 }
 
+export function resolveGroupedDragLayout(
+  next: LayoutItem[],
+  before: LayoutItem[],
+  movedId: string,
+  selectedIds: readonly string[] | undefined,
+  options: ResolveDisplacementOptions,
+): LayoutItem[] | null {
+  const selected = new Set(selectedIds ?? []);
+  if (selected.size < 2 || !selected.has(movedId)) return null;
+
+  const moved = next.find((item) => item.i === movedId);
+  const prevMoved = before.find((item) => item.i === movedId);
+  if (!moved || !prevMoved) return null;
+
+  const dx = moved.x - prevMoved.x;
+  const dy = moved.y - prevMoved.y;
+  if (dx === 0 && dy === 0) return null;
+
+  const result = before.map((item) =>
+    selected.has(item.i)
+      ? { ...item, x: item.x + dx, y: item.y + dy }
+      : { ...item },
+  );
+
+  return layoutIsValid(result, options) ? result : null;
+}
+
 function resolveInsertedLayout(
   next: LayoutItem[],
   before: LayoutItem[],

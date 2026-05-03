@@ -4,7 +4,14 @@ import type { Layout, LayoutItem, ResponsiveLayouts } from "react-grid-layout";
 import { aspectRatio, gridBounds, snapToGrid } from "react-grid-layout/core";
 import "react-grid-layout/css/styles.css";
 import type { AutoLayouts, TileSpecMap } from "./types";
-import { chooseRows, chooseSpan, mergeLayout, normalizeLayoutItem, resolveDisplacedLayout } from "./pack";
+import {
+  chooseRows,
+  chooseSpan,
+  mergeLayout,
+  normalizeLayoutItem,
+  resolveDisplacedLayout,
+  resolveGroupedDragLayout,
+} from "./pack";
 
 // rgl reads allowOverlap off the compactor (not props). With allowOverlap the
 // placeholder tracks the cursor every frame even when hovering other tiles —
@@ -21,6 +28,33 @@ function toStoredLayout(layout: Layout, columns: number, maxRows?: number): Layo
     const normalized = normalizeLayoutItem(item, { columns, maxRows });
     return normalized ? [normalized] : [];
   });
+}
+
+function sameLayout(a: LayoutItem[] | undefined, b: LayoutItem[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (
+      !left ||
+      !right ||
+      left.i !== right.i ||
+      left.x !== right.x ||
+      left.y !== right.y ||
+      left.w !== right.w ||
+      left.h !== right.h
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sameLayouts(a: ResponsiveLayouts | null, b: ResponsiveLayouts | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return sameLayout(a.lg, b.lg) && sameLayout(a.sm, b.sm);
 }
 
 export interface AutoCanvasProps {
@@ -47,6 +81,8 @@ export interface AutoCanvasProps {
   onLayoutChange?: (next: AutoLayouts) => void;
   /** Disable drag/resize/compaction. */
   readonly?: boolean;
+  /** Currently selected tile ids. Dragging one selected tile moves the whole selection as a group. */
+  selectedIds?: readonly string[];
   /** Children must have `key={id}` matching a tileSpecs id. */
   children: ReactNode;
   /** Extra className on the grid container. */
@@ -79,6 +115,7 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
     layout,
     onLayoutChange,
     readonly,
+    selectedIds,
     children,
     className,
   },
@@ -184,6 +221,7 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
     ? maxRows * rowHeight + gap * Math.max(0, maxRows - 1)
     : undefined;
   const setDragPreviewLayouts = useCallback((next: ResponsiveLayouts | null) => {
+    if (sameLayouts(dragPreviewRef.current, next)) return;
     dragPreviewRef.current = next;
     setDragPreview(next);
   }, []);
@@ -231,6 +269,17 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
       const moved = normalizedNext.find((item) => item.i === changed.i);
       if (!moved) return;
 
+      const grouped = resolveGroupedDragLayout(normalizedNext, before, moved.i, selectedIds, { columns, maxRows });
+      if (grouped) {
+        const bp = breakpointRef.current;
+        setDragPreviewLayouts({ ...merged, [bp]: grouped });
+        return;
+      }
+      if ((selectedIds?.length ?? 0) > 1 && selectedIds?.includes(moved.i)) {
+        setDragPreviewLayouts(null);
+        return;
+      }
+
       const others = normalizedNext.filter((item) => item.i !== moved.i);
       const collides = others.some((item) => rectsOverlap(moved, item));
       const overflows = !!maxRows && maxRows > 0 && moved.y + moved.h > maxRows;
@@ -248,7 +297,7 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
       const bp = breakpointRef.current;
       setDragPreviewLayouts({ ...merged, [bp]: resolved });
     },
-    [onLayoutChange, readonly, maxRows, columns, merged, setDragPreviewLayouts],
+    [onLayoutChange, readonly, maxRows, columns, merged, selectedIds, setDragPreviewLayouts],
   );
 
   const handleInteractionStop = useCallback(
@@ -275,22 +324,31 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
 
       let finalLayout = kind === "drag" && preview ? preview : next;
       if (!preview && moved) {
-        const others = next.filter((l) => l.i !== moved.i);
-        const collides = others.some((o) => rectsOverlap(moved, o));
-        const overflows = !!maxRows && maxRows > 0 && moved.y + moved.h > maxRows;
-        if (collides || overflows) {
-          const displaced =
-            kind === "drag" && !overflows
-              ? resolveDisplacedLayout(next, before, moved.i, { columns, maxRows })
-              : null;
-          if (displaced) {
-            finalLayout = displaced;
-          } else {
-            const prev = before.find((p) => p.i === moved.i);
-            if (prev) {
-              finalLayout = next.map((l) =>
-                l.i === moved.i ? { ...l, x: prev.x, y: prev.y, w: prev.w, h: prev.h } : l,
-              );
+        const grouped = kind === "drag"
+          ? resolveGroupedDragLayout(next, before, moved.i, selectedIds, { columns, maxRows })
+          : null;
+        if (grouped) {
+          finalLayout = grouped;
+        } else if ((selectedIds?.length ?? 0) > 1 && selectedIds?.includes(moved.i)) {
+          finalLayout = before;
+        } else {
+          const others = next.filter((l) => l.i !== moved.i);
+          const collides = others.some((o) => rectsOverlap(moved, o));
+          const overflows = !!maxRows && maxRows > 0 && moved.y + moved.h > maxRows;
+          if (collides || overflows) {
+            const displaced =
+              kind === "drag" && !overflows
+                ? resolveDisplacedLayout(next, before, moved.i, { columns, maxRows })
+                : null;
+            if (displaced) {
+              finalLayout = displaced;
+            } else {
+              const prev = before.find((p) => p.i === moved.i);
+              if (prev) {
+                finalLayout = next.map((l) =>
+                  l.i === moved.i ? { ...l, x: prev.x, y: prev.y, w: prev.w, h: prev.h } : l,
+                );
+              }
             }
           }
         }
@@ -305,7 +363,7 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
         [bp]: toStoredLayout(finalLayout, bp === "sm" ? smColumns : columns, maxRows),
       });
     },
-    [onLayoutChange, readonly, layout, maxRows, columns, smColumns, setDragPreviewLayouts],
+    [onLayoutChange, readonly, layout, maxRows, columns, smColumns, selectedIds, setDragPreviewLayouts],
   );
 
   const setContainerRef = useCallback(
