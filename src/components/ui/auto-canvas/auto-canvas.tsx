@@ -4,7 +4,7 @@ import type { Layout, LayoutItem, ResponsiveLayouts } from "react-grid-layout";
 import { aspectRatio, gridBounds, snapToGrid } from "react-grid-layout/core";
 import "react-grid-layout/css/styles.css";
 import type { AutoLayouts, TileSpecMap } from "./types";
-import { chooseRows, chooseSpan, mergeLayout } from "./pack";
+import { chooseRows, chooseSpan, mergeLayout, resolveDisplacedLayout } from "./pack";
 
 // rgl reads allowOverlap off the compactor (not props). With allowOverlap the
 // placeholder tracks the cursor every frame even when hovering other tiles —
@@ -189,10 +189,12 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
   // Snapshot of the pre-drag layout so we can revert an overlapping drop.
   // Example: [{ i:"a", x:0, y:0, w:6, h:6 }, { i:"b", x:6, y:0, w:6, h:6 }]
   const preInteractionRef = useRef<Layout | null>(null);
+  const interactionKindRef = useRef<"drag" | "resize" | null>(null);
 
   const handleInteractionStart = useCallback(
     (current: Layout, kind: "drag" | "resize") => {
       preInteractionRef.current = current.map((l) => ({ ...l }));
+      interactionKindRef.current = kind;
       document.body.classList.add("grid-interacting");
       // Resize-specific class so the placeholder can render as the *primary*
       // snap-target signal (above the live tile, stronger contrast). During
@@ -210,6 +212,8 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
 
       const before = preInteractionRef.current ?? [];
       preInteractionRef.current = null;
+      const kind = interactionKindRef.current;
+      interactionKindRef.current = null;
 
       // Find which item changed (dragged or resized). We only need to reject
       // that one — siblings can never collide with each other because the
@@ -225,11 +229,19 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
         const collides = others.some((o) => rectsOverlap(moved, o));
         const overflows = !!maxRows && maxRows > 0 && moved.y + moved.h > maxRows;
         if (collides || overflows) {
-          const prev = before.find((p) => p.i === moved.i);
-          if (prev) {
-            finalLayout = next.map((l) =>
-              l.i === moved.i ? { ...l, x: prev.x, y: prev.y, w: prev.w, h: prev.h } : l,
-            );
+          const displaced =
+            kind === "drag" && !overflows
+              ? resolveDisplacedLayout(next, before, moved.i, { columns, maxRows })
+              : null;
+          if (displaced) {
+            finalLayout = displaced;
+          } else {
+            const prev = before.find((p) => p.i === moved.i);
+            if (prev) {
+              finalLayout = next.map((l) =>
+                l.i === moved.i ? { ...l, x: prev.x, y: prev.y, w: prev.w, h: prev.h } : l,
+              );
+            }
           }
         }
       }
@@ -241,7 +253,7 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
       };
       onLayoutChange({ ...prevLayouts, [bp]: toStoredLayout(finalLayout) });
     },
-    [onLayoutChange, readonly, layout, maxRows],
+    [onLayoutChange, readonly, layout, maxRows, columns],
   );
 
   const setContainerRef = useCallback(

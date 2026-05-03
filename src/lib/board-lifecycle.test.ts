@@ -5,6 +5,7 @@ import {
   duplicateItemWithSpillToPages,
   editorPagesFromCanvas,
   emptyBoardPage,
+  pruneEmptyPages,
   removeItemsFromPage,
 } from "./board-lifecycle";
 import { BOARD_SUMMARY_ITEM_ID, type BoardPage } from "./types";
@@ -65,6 +66,17 @@ describe("board lifecycle", () => {
     expect(next.items.map((item) => item.id)).toEqual(["keep"]);
     expect(next.layouts.lg.map((item) => item.i)).toEqual(["keep"]);
     expect(next.layouts.sm.map((item) => item.i)).toEqual(["keep"]);
+  });
+
+  test("prunes empty pages but keeps one editable fallback page", () => {
+    const full: BoardPage = {
+      id: "full",
+      items: [{ id: "note", type: "note", text: "x" }],
+      layouts: { lg: [{ i: "note", x: 0, y: 0, w: 4, h: 4 }], sm: [] },
+    };
+
+    expect(pruneEmptyPages([{ ...full, items: [], layouts }, full]).map((page) => page.id)).toEqual(["full"]);
+    expect(pruneEmptyPages([{ ...full, items: [], layouts }])).toHaveLength(1);
   });
 
   test("removes draft-image previews via adapter while applying pure state removal", () => {

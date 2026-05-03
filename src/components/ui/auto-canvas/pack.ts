@@ -14,6 +14,11 @@ export interface PackOptions {
   maxRows?: number;
 }
 
+export interface ResolveDisplacementOptions {
+  columns: number;
+  maxRows?: number;
+}
+
 /**
  * Pixel width for a `span` at the given container width.
  * Mirrors react-grid-layout's column math: N columns and N-1 gaps fill the container.
@@ -224,10 +229,15 @@ export function mergeLayout(
   specs: Array<{ id: string } & TileSpec>,
   options: PackOptions,
 ): LayoutItem[] {
-  const persistedById = new Map(persisted.map((l) => [l.i, l]));
   const specById = new Map(specs.map((s) => [s.id, s]));
+  const persistedById = new Map<string, LayoutItem>();
+  for (const item of persisted) {
+    const normalized = normalizePersistedLayoutItem(item, options);
+    if (normalized) persistedById.set(normalized.i, normalized);
+  }
 
   const kept: LayoutItem[] = [];
+  const keptIds = new Set<string>();
   const skyline: number[] = new Array(options.columns).fill(0);
 
   // Seed the skyline with rendered footprints so newly measured aspect tiles
@@ -240,7 +250,10 @@ export function mergeLayout(
         ? chooseRows(spec, p.w, options)
         : p.h;
     const item = renderedH === p.h ? p : { ...p, h: renderedH };
+    if (options.maxRows && options.maxRows > 0 && item.y + item.h > options.maxRows) continue;
+    if (kept.some((existing) => rectsOverlap(existing, item))) continue;
     kept.push(item);
+    keptIds.add(item.i);
     for (let k = 0; k < item.w; k++) {
       const col = item.x + k;
       if (col >= 0 && col < options.columns) {
@@ -253,7 +266,7 @@ export function mergeLayout(
   // real leftover gap, but if even the minimum footprint overflows, callers
   // see tentativeBottom > maxRows and spill to the next page.
   for (const spec of specs) {
-    if (persistedById.has(spec.id)) continue;
+    if (keptIds.has(spec.id)) continue;
     const placement = placeFresh(spec, skyline, options);
 
     for (let k = 0; k < placement.w; k++) {
@@ -275,6 +288,163 @@ export function mergeLayout(
   const final = kept.filter((l) => specById.has(l.i));
 
   return final;
+}
+
+function normalizePersistedLayoutItem(item: LayoutItem, options: PackOptions): LayoutItem | null {
+  if (!item.i) return null;
+  const xValue = Number(item.x);
+  const yValue = Number(item.y);
+  const wValue = Number(item.w);
+  const hValue = Number(item.h);
+  if (![xValue, yValue, wValue, hValue].every(Number.isFinite)) return null;
+
+  const w = Math.max(1, Math.min(options.columns, Math.floor(wValue)));
+  const maxX = Math.max(0, options.columns - w);
+  const maxRows = options.maxRows && options.maxRows > 0 ? Math.floor(options.maxRows) : null;
+  const h = Math.max(1, Math.min(maxRows ?? Number.POSITIVE_INFINITY, Math.floor(hValue)));
+  const maxY = maxRows ? Math.max(0, maxRows - h) : Number.POSITIVE_INFINITY;
+  return {
+    ...item,
+    x: Math.max(0, Math.min(maxX, Math.floor(xValue))),
+    y: Math.max(0, Math.min(maxY, Math.floor(yValue))),
+    w,
+    h,
+  };
+}
+
+function rectsOverlap(
+  a: Pick<LayoutItem, "x" | "y" | "w" | "h">,
+  b: Pick<LayoutItem, "x" | "y" | "w" | "h">,
+): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+export function resolveDisplacedLayout(
+  next: LayoutItem[],
+  before: LayoutItem[],
+  movedId: string,
+  options: ResolveDisplacementOptions,
+): LayoutItem[] | null {
+  const moved = next.find((item) => item.i === movedId);
+  const prevMoved = before.find((item) => item.i === movedId);
+  if (!moved || !prevMoved || !fitsBounds(moved, options)) return null;
+
+  const result = next.map((item) => ({ ...item }));
+  const queue = result
+    .filter((item) => item.i !== movedId && rectsOverlap(item, moved))
+    .map((item) => item.i);
+
+  for (const id of queue) {
+    const item = result.find((entry) => entry.i === id);
+    if (!item || !result.some((entry) => entry.i !== id && rectsOverlap(entry, item))) continue;
+
+    const position = findDisplacedPosition({
+      item,
+      layouts: result,
+      moved,
+      prevMoved,
+      options,
+    });
+    if (!position) return null;
+    item.x = position.x;
+    item.y = position.y;
+  }
+
+  return layoutIsValid(result, options) ? result : null;
+}
+
+function findDisplacedPosition({
+  item,
+  layouts,
+  moved,
+  prevMoved,
+  options,
+}: {
+  item: LayoutItem;
+  layouts: LayoutItem[];
+  moved: LayoutItem;
+  prevMoved: LayoutItem;
+  options: ResolveDisplacementOptions;
+}): { x: number; y: number } | null {
+  const dx = moved.x - prevMoved.x;
+  const dy = moved.y - prevMoved.y;
+  const push =
+    Math.abs(dx) >= Math.abs(dy)
+      ? { x: dx >= 0 ? moved.x + moved.w : moved.x - item.w, y: item.y }
+      : { x: item.x, y: dy >= 0 ? moved.y + moved.h : moved.y - item.h };
+  const vacated = { x: prevMoved.x, y: prevMoved.y };
+  const swapFirst = overlapArea(item, moved) / Math.max(1, item.w * item.h) > 0.65;
+  const preferred = swapFirst ? [vacated, push] : [push, vacated];
+
+  for (const position of preferred) {
+    if (positionFits(item, position, layouts, options)) return position;
+  }
+
+  return nearestOpenPosition(item, layouts, options);
+}
+
+function nearestOpenPosition(
+  item: LayoutItem,
+  layouts: LayoutItem[],
+  options: ResolveDisplacementOptions,
+): { x: number; y: number } | null {
+  const maxY = maxAllowedY(item, options);
+  let best: { x: number; y: number; score: number } | null = null;
+  for (let y = 0; y <= maxY; y++) {
+    for (let x = 0; x <= options.columns - item.w; x++) {
+      const position = { x, y };
+      if (!positionFits(item, position, layouts, options)) continue;
+      const score = Math.abs(x - item.x) + Math.abs(y - item.y) * options.columns;
+      if (!best || score < best.score) best = { x, y, score };
+    }
+  }
+  return best && { x: best.x, y: best.y };
+}
+
+function positionFits(
+  item: LayoutItem,
+  position: { x: number; y: number },
+  layouts: LayoutItem[],
+  options: ResolveDisplacementOptions,
+) {
+  const candidate = { ...item, ...position };
+  return (
+    fitsBounds(candidate, options) &&
+    layouts.every((entry) => entry.i === item.i || !rectsOverlap(candidate, entry))
+  );
+}
+
+function fitsBounds(item: Pick<LayoutItem, "x" | "y" | "w" | "h">, options: ResolveDisplacementOptions) {
+  return (
+    item.x >= 0 &&
+    item.y >= 0 &&
+    item.w > 0 &&
+    item.h > 0 &&
+    item.x + item.w <= options.columns &&
+    (!options.maxRows || options.maxRows <= 0 || item.y + item.h <= options.maxRows)
+  );
+}
+
+function maxAllowedY(item: LayoutItem, options: ResolveDisplacementOptions) {
+  if (options.maxRows && options.maxRows > 0) return Math.max(0, options.maxRows - item.h);
+  return Math.max(0, ...layoutsBottom([item]) + 20);
+}
+
+function layoutIsValid(layouts: LayoutItem[], options: ResolveDisplacementOptions) {
+  return layouts.every((item, index) => (
+    fitsBounds(item, options) &&
+    layouts.every((other, otherIndex) => index === otherIndex || !rectsOverlap(item, other))
+  ));
+}
+
+function layoutsBottom(layouts: LayoutItem[]) {
+  return layouts.map((item) => item.y + item.h);
+}
+
+function overlapArea(a: LayoutItem, b: LayoutItem) {
+  const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  return x * y;
 }
 
 /**

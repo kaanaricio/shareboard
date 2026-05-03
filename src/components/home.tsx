@@ -27,6 +27,7 @@ import {
   editorPagesFromCanvas,
   emptyBoardPage,
   packPageLayouts,
+  pruneEmptyPages,
   removeItemsFromPage,
   revokeDraftImagePreviews,
 } from "@/lib/board-lifecycle";
@@ -106,6 +107,10 @@ function mediaBytesForPages(pages: readonly BoardPage[]) {
   );
 }
 
+function mediaBytesForItems(items: readonly CanvasItem[]) {
+  return items.reduce((sum, item) => sum + (item.type === "image" ? item.size ?? 0 : 0), 0);
+}
+
 async function fileFingerprint(file: File) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const subtle = globalThis.crypto?.subtle;
@@ -117,6 +122,21 @@ async function fileFingerprint(file: File) {
   let hash = 2166136261;
   for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619);
   return `${file.type}:${file.size}:${hash >>> 0}`;
+}
+
+function imageFilesFromTransfer(data: DataTransfer) {
+  const fromFiles = Array.from(data.files).filter((file) => file.type.startsWith("image/"));
+  if (fromFiles.length > 0) return fromFiles;
+  return Array.from(data.items)
+    .filter((item) => item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => !!file);
+}
+
+function revokeImagePreviews(items: readonly CanvasItem[]) {
+  for (const item of items) {
+    if (isDraftImageItem(item)) URL.revokeObjectURL(item.previewUrl);
+  }
 }
 
 type SelectionEvent = { metaKey?: boolean; ctrlKey?: boolean };
@@ -141,6 +161,8 @@ export function Home() {
   const [pasteDialogOpen, setPasteDialogOpen] = useState(false);
   const [pasteInput, setPasteInput] = useState("");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "save">("saved");
+  const pendingActivePageRef = useRef<number | null>(null);
+  const pendingSelectedIdsRef = useRef<string[] | null>(null);
   const lastSavedSigRef = useRef<string>("");
   const lockedDisposeRef = useRef<(() => void) | null>(null);
   const canvasClipboardRef = useRef<CanvasItem[]>([]);
@@ -278,6 +300,22 @@ export function Home() {
     setSelectedIds([]);
   }, [activePage]);
 
+  useEffect(() => {
+    const pendingSelected = pendingSelectedIdsRef.current;
+    if (pendingSelected) {
+      pendingSelectedIdsRef.current = null;
+      setSelectedIds(pendingSelected);
+    }
+
+    const pendingPage = pendingActivePageRef.current;
+    if (pendingPage == null) return;
+    pendingActivePageRef.current = null;
+    const clamped = Math.max(0, Math.min(pendingPage, pages.length - 1));
+    if (clamped !== activePage) {
+      navigate({ search: clamped === 0 ? {} : { page: clamped + 1 }, replace: false });
+    }
+  }, [activePage, navigate, pages.length]);
+
   const currentDraftSig = useMemo(
     () => draftSignature(pages, generation, boardOrigin),
     [pages, generation, boardOrigin],
@@ -408,14 +446,12 @@ export function Home() {
       setPages((prev) => {
         const result = addItemWithSpillToPages({ pages: prev, activePage, item, maxRows });
         landedIndex = result.landedIndex;
+        if (result.landedIndex !== activePage) pendingActivePageRef.current = result.landedIndex;
         return result.pages;
       });
-      if (landedIndex !== activePage) {
-        queueMicrotask(() => navigate({ search: { page: landedIndex + 1 }, replace: false }));
-      }
       return landedIndex;
     },
-    [activePage, maxRows, navigate]
+    [activePage, maxRows]
   );
 
   const addUrl = useCallback(
@@ -546,12 +582,10 @@ export function Home() {
           landingPage = result.landedIndex;
           lastLandedIndex = result.landedIndex;
         }
+        if (lastLandedIndex !== activePage) pendingActivePageRef.current = lastLandedIndex;
         return nextPages;
       });
       setSelectedIds(items.map((item) => item.id));
-      if (lastLandedIndex !== activePage) {
-        queueMicrotask(() => navigate({ search: { page: lastLandedIndex + 1 }, replace: false }));
-      }
       notify.success(
         duplicateCount > 0
           ? `${items.length} unique ${items.length === 1 ? "image" : "images"} added, ${duplicateCount} duplicate ${duplicateCount === 1 ? "entry" : "entries"} skipped`
@@ -561,7 +595,7 @@ export function Home() {
       );
       return true;
     },
-    [activePage, maxRows, navigate],
+    [activePage, maxRows],
   );
 
   const addNote = useCallback(
@@ -586,9 +620,17 @@ export function Home() {
     (pageIndex: number, ids: string[]) => {
       if (ids.length === 0) return;
       const idSet = new Set(ids);
-      patchPage(pageIndex, (page) => {
-        return removeItemsFromPage(page, idSet);
-      });
+      const currentPageId = pagesRef.current[activePage]?.id;
+      const removed = pagesRef.current.map((page, index) =>
+        index === pageIndex ? removeItemsFromPage(page, idSet) : page,
+      );
+      const compacted = pruneEmptyPages(removed);
+      const currentIndex = currentPageId ? compacted.findIndex((page) => page.id === currentPageId) : -1;
+      const nextActivePage = currentIndex >= 0 ? currentIndex : Math.min(pageIndex, compacted.length - 1);
+      setPages(compacted);
+      if (nextActivePage !== activePage) {
+        queueMicrotask(() => navigate({ search: nextActivePage === 0 ? {} : { page: nextActivePage + 1 }, replace: false }));
+      }
       if (idSet.has(BOARD_SUMMARY_ITEM_ID)) setGeneration(null);
       setGeneration((g) =>
         g
@@ -597,7 +639,7 @@ export function Home() {
       );
       setSelectedIds((prev) => prev.filter((x) => !idSet.has(x)));
     },
-    [patchPage]
+    [activePage, navigate]
   );
 
   const removeItem = useCallback(
@@ -610,6 +652,11 @@ export function Home() {
   const duplicateItem = useCallback(
     (pageIndex: number, id: string) => {
       if (id === BOARD_SUMMARY_ITEM_ID) return;
+      const source = pagesRef.current[pageIndex]?.items.find((item) => item.id === id);
+      if (source?.type === "image" && mediaBytesForPages(pagesRef.current) + (source.size ?? 0) > IMAGE_POLICY.maxBoardBytes) {
+        notify.error(`Boards can hold up to ${formatBytes(IMAGE_POLICY.maxBoardBytes)} of images`);
+        return;
+      }
       let landedIndex = pageIndex;
       let newId: string | null = null;
       setPages((prev) => {
@@ -622,20 +669,24 @@ export function Home() {
         if (!result) return prev;
         landedIndex = result.landedIndex;
         newId = result.newId;
+        pendingSelectedIdsRef.current = [result.newId];
+        if (result.landedIndex !== pageIndex) pendingActivePageRef.current = result.landedIndex;
         return result.pages;
       });
-      if (newId) setSelectedIds([newId]);
-      if (landedIndex !== pageIndex) {
-        queueMicrotask(() => navigate({ search: { page: landedIndex + 1 }, replace: false }));
-      }
+      if (newId && landedIndex === pageIndex) setSelectedIds([newId]);
     },
-    [maxRows, navigate]
+    [maxRows]
   );
 
   const pasteCanvasItems = useCallback(
     (items: CanvasItem[]) => {
       const copies = items.map(cloneCanvasItem).filter((item): item is CanvasItem => !!item);
       if (copies.length === 0) return false;
+      if (mediaBytesForPages(pagesRef.current) + mediaBytesForItems(copies) > IMAGE_POLICY.maxBoardBytes) {
+        revokeImagePreviews(copies);
+        notify.error(`Boards can hold up to ${formatBytes(IMAGE_POLICY.maxBoardBytes)} of images`);
+        return false;
+      }
 
       let lastLandedIndex = activePage;
       let nextSelectedIds: string[] = [];
@@ -656,15 +707,14 @@ export function Home() {
           pastedIds.push(item.id);
         }
         nextSelectedIds = pastedIds;
+        pendingSelectedIdsRef.current = pastedIds;
+        if (lastLandedIndex !== activePage) pendingActivePageRef.current = lastLandedIndex;
         return nextPages;
       });
-      setSelectedIds(nextSelectedIds);
-      if (lastLandedIndex !== activePage) {
-        queueMicrotask(() => navigate({ search: { page: lastLandedIndex + 1 }, replace: false }));
-      }
+      if (lastLandedIndex === activePage) setSelectedIds(nextSelectedIds);
       return true;
     },
-    [activePage, maxRows, navigate],
+    [activePage, maxRows],
   );
 
   const updateNoteText = useCallback(
@@ -730,7 +780,7 @@ export function Home() {
       if (needsSetup) return;
 
       const files = Array.from(data.files);
-      const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+      const imageFiles = imageFilesFromTransfer(data);
       if (imageFiles.length > 0) {
         void addImages(imageFiles);
         return;
@@ -786,7 +836,7 @@ export function Home() {
 
     if (clipboard.files.length > 0) {
       e.preventDefault();
-      const imageFiles = Array.from(clipboard.files).filter((file) => file.type.startsWith("image/"));
+      const imageFiles = imageFilesFromTransfer(clipboard);
       if (imageFiles.length > 0) {
         void addImages(imageFiles);
       } else {
@@ -795,10 +845,7 @@ export function Home() {
       return;
     }
 
-    const imageFilesFromItems = Array.from(clipboard.items)
-      .filter((item) => item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => !!file);
+    const imageFilesFromItems = imageFilesFromTransfer(clipboard);
     if (imageFilesFromItems.length > 0) {
       e.preventDefault();
       void addImages(imageFilesFromItems);

@@ -34,6 +34,11 @@ export function emptyBoardPage(): BoardPage {
   return { id: nanoid(8), items: [], layouts: { lg: [], sm: [] } };
 }
 
+export function pruneEmptyPages(pages: BoardPage[]): BoardPage[] {
+  const nonEmpty = pages.filter((page) => page.items.length > 0);
+  return nonEmpty.length > 0 ? nonEmpty : [emptyBoardPage()];
+}
+
 export function packPageLayouts(items: CanvasItem[], prev: GridLayouts, maxRows: number): GridLayouts {
   const specs = buildSpecList(items);
   const containerWidth = estimateContainerWidth();

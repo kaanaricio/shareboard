@@ -7,6 +7,7 @@ import {
   packLayout,
   packSkyline,
   pxToRows,
+  resolveDisplacedLayout,
   rowsToPx,
 } from "./pack";
 import type { TileSpec } from "./types";
@@ -218,6 +219,49 @@ describe("mergeLayout", () => {
     );
     expect(merged.map((l) => l.i)).toEqual(["fresh"]);
   });
+  test("normalizes persisted layouts back inside the grid and row budget", () => {
+    const merged = mergeLayout(
+      [
+        { i: "wide", x: -5, y: -2, w: 40, h: 6 },
+        { i: "low", x: 20, y: 99, w: 8, h: 12 },
+      ],
+      [
+        { id: "wide", preferredSpan: 8, preferredRows: 6 },
+        { id: "low", preferredSpan: 8, preferredRows: 12 },
+      ],
+      { ...OPTS, maxRows: 18 },
+    );
+
+    expect(merged.find((l) => l.i === "wide")).toMatchObject({ x: 0, y: 0, w: 24 });
+    const low = merged.find((l) => l.i === "low")!;
+    expect(low.x + low.w).toBeLessThanOrEqual(OPTS.columns);
+    expect(low.y + low.h).toBeLessThanOrEqual(18);
+  });
+  test("repacks overlapping persisted layouts instead of preserving collisions", () => {
+    const merged = mergeLayout(
+      [
+        { i: "a", x: 0, y: 0, w: 12, h: 6 },
+        { i: "b", x: 0, y: 0, w: 12, h: 6 },
+      ],
+      [
+        { id: "a", preferredSpan: 12, preferredRows: 6 },
+        { id: "b", preferredSpan: 12, preferredRows: 6 },
+      ],
+      OPTS,
+    );
+
+    expect(merged.find((l) => l.i === "a")).toMatchObject({ x: 0, y: 0 });
+    expect(merged.find((l) => l.i === "b")).toMatchObject({ x: 12, y: 0 });
+  });
+  test("drops malformed persisted coordinates and repacks the tile", () => {
+    const merged = mergeLayout(
+      [{ i: "bad", x: Number.NaN, y: 0, w: 8, h: 6 }],
+      [{ id: "bad", preferredSpan: 8, preferredRows: 6 }],
+      OPTS,
+    );
+
+    expect(merged).toEqual([expect.objectContaining({ i: "bad", x: 0, y: 0, w: 8, h: 6 })]);
+  });
   test("empty persisted layout equals packLayout", () => {
     const specs: Array<{ id: string } & TileSpec> = [
       { id: "a", preferredSpan: 8, preferredRows: 6 },
@@ -228,6 +272,53 @@ describe("mergeLayout", () => {
     expect(merged.map((l) => ({ i: l.i, x: l.x, y: l.y, w: l.w, h: l.h }))).toEqual(
       packed.map((l) => ({ i: l.i, x: l.x, y: l.y, w: l.w, h: l.h })),
     );
+  });
+});
+
+describe("resolveDisplacedLayout", () => {
+  test("swaps a displaced card into the moved card's vacated slot", () => {
+    const before = [
+      { i: "a", x: 0, y: 0, w: 8, h: 6 },
+      { i: "b", x: 8, y: 0, w: 8, h: 6 },
+    ];
+    const next = [
+      { i: "a", x: 8, y: 0, w: 8, h: 6 },
+      { i: "b", x: 8, y: 0, w: 8, h: 6 },
+    ];
+
+    const resolved = resolveDisplacedLayout(next, before, "a", { columns: 24, maxRows: 12 });
+
+    expect(resolved?.find((item) => item.i === "a")).toMatchObject({ x: 8, y: 0 });
+    expect(resolved?.find((item) => item.i === "b")).toMatchObject({ x: 0, y: 0 });
+  });
+
+  test("pushes a partially overlapped card in the drag direction when space exists", () => {
+    const before = [
+      { i: "a", x: 0, y: 0, w: 8, h: 6 },
+      { i: "b", x: 8, y: 0, w: 8, h: 6 },
+    ];
+    const next = [
+      { i: "a", x: 4, y: 0, w: 8, h: 6 },
+      { i: "b", x: 8, y: 0, w: 8, h: 6 },
+    ];
+
+    const resolved = resolveDisplacedLayout(next, before, "a", { columns: 24, maxRows: 12 });
+
+    expect(resolved?.find((item) => item.i === "a")).toMatchObject({ x: 4, y: 0 });
+    expect(resolved?.find((item) => item.i === "b")).toMatchObject({ x: 12, y: 0 });
+  });
+
+  test("returns null when no non-overlapping displaced layout fits", () => {
+    const before = [
+      { i: "a", x: 0, y: 0, w: 6, h: 6 },
+      { i: "b", x: 6, y: 0, w: 18, h: 6 },
+    ];
+    const next = [
+      { i: "a", x: 6, y: 0, w: 6, h: 6 },
+      { i: "b", x: 6, y: 0, w: 18, h: 6 },
+    ];
+
+    expect(resolveDisplacedLayout(next, before, "a", { columns: 24, maxRows: 6 })).toBeNull();
   });
 });
 

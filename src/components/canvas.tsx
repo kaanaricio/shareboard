@@ -524,6 +524,7 @@ export function Canvas({
                         e.stopPropagation();
                         onRemove(item.id);
                       }}
+                      aria-label="Remove item"
                       className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-md transition-all hover:bg-black/60 hover:scale-110"
                     >
                       <X className="h-3.5 w-3.5" strokeWidth={2.5} />
