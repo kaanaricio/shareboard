@@ -320,6 +320,23 @@ describe("resolveDisplacedLayout", () => {
 
     expect(resolveDisplacedLayout(next, before, "a", { columns: 24, maxRows: 6 })).toBeNull();
   });
+
+  test("finds a legal displaced slot when there is no row budget", () => {
+    const before = [
+      { i: "a", x: 0, y: 0, w: 12, h: 6 },
+      { i: "b", x: 12, y: 0, w: 12, h: 6 },
+      { i: "c", x: 0, y: 6, w: 12, h: 6 },
+    ];
+    const next = [
+      { i: "a", x: 12, y: 0, w: 12, h: 6 },
+      { i: "b", x: 12, y: 0, w: 12, h: 6 },
+      { i: "c", x: 0, y: 6, w: 12, h: 6 },
+    ];
+
+    const resolved = resolveDisplacedLayout(next, before, "a", { columns: 24 });
+
+    expect(resolved?.find((item) => item.i === "b")).toMatchObject({ x: 0, y: 0 });
+  });
 });
 
 describe("row-tiling widths", () => {

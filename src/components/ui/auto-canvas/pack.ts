@@ -427,7 +427,7 @@ function fitsBounds(item: Pick<LayoutItem, "x" | "y" | "w" | "h">, options: Reso
 
 function maxAllowedY(item: LayoutItem, options: ResolveDisplacementOptions) {
   if (options.maxRows && options.maxRows > 0) return Math.max(0, options.maxRows - item.h);
-  return Math.max(0, ...layoutsBottom([item]) + 20);
+  return Math.max(0, item.y + item.h + 20);
 }
 
 function layoutIsValid(layouts: LayoutItem[], options: ResolveDisplacementOptions) {
