@@ -303,12 +303,20 @@ function normalizePersistedLayoutItem(item: LayoutItem, options: PackOptions): L
   const maxRows = options.maxRows && options.maxRows > 0 ? Math.floor(options.maxRows) : null;
   const h = Math.max(1, Math.min(maxRows ?? Number.POSITIVE_INFINITY, Math.floor(hValue)));
   const maxY = maxRows ? Math.max(0, maxRows - h) : Number.POSITIVE_INFINITY;
+  const minW = Number(item.minW);
+  const maxW = Number(item.maxW);
+  const minH = Number(item.minH);
+  const maxH = Number(item.maxH);
   return {
     ...item,
     x: Math.max(0, Math.min(maxX, Math.floor(xValue))),
     y: Math.max(0, Math.min(maxY, Math.floor(yValue))),
     w,
     h,
+    ...(Number.isFinite(minW) && { minW: Math.min(minW, w) }),
+    ...(Number.isFinite(maxW) && { maxW: Math.max(maxW, w) }),
+    ...(Number.isFinite(minH) && { minH: Math.min(minH, h) }),
+    ...(Number.isFinite(maxH) && { maxH: Math.max(maxH, h) }),
   };
 }
 

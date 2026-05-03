@@ -18,17 +18,23 @@ function rectsOverlap(a: Pick<LayoutItem, "x" | "y" | "w" | "h">, b: Pick<Layout
 }
 
 function toStoredLayout(layout: Layout): Layout {
-  return layout.map(({ i, x, y, w, h, minW, maxW, minH, maxH }) => ({
-    i,
-    x,
-    y,
-    w,
-    h,
-    ...(minW != null && { minW }),
-    ...(maxW != null && { maxW }),
-    ...(minH != null && { minH }),
-    ...(maxH != null && { maxH }),
-  }));
+  return layout.map(({ i, x, y, w, h, minW, maxW, minH, maxH }) => {
+    const cleanMinW = Number(minW);
+    const cleanMaxW = Number(maxW);
+    const cleanMinH = Number(minH);
+    const cleanMaxH = Number(maxH);
+    return {
+      i,
+      x,
+      y,
+      w,
+      h,
+      ...(Number.isFinite(cleanMinW) && { minW: Math.min(cleanMinW, w) }),
+      ...(Number.isFinite(cleanMaxW) && { maxW: Math.max(cleanMaxW, w) }),
+      ...(Number.isFinite(cleanMinH) && { minH: Math.min(cleanMinH, h) }),
+      ...(Number.isFinite(cleanMaxH) && { maxH: Math.max(cleanMaxH, h) }),
+    };
+  });
 }
 
 export interface AutoCanvasProps {
@@ -188,6 +194,9 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
 
   const [dragPreview, setDragPreview] = useState<ResponsiveLayouts | null>(null);
   const dragPreviewRef = useRef<ResponsiveLayouts | null>(null);
+  const pageHeight = maxRows && maxRows > 0
+    ? maxRows * rowHeight + gap * Math.max(0, maxRows - 1)
+    : undefined;
   const setDragPreviewLayouts = useCallback((next: ResponsiveLayouts | null) => {
     dragPreviewRef.current = next;
     setDragPreview(next);
@@ -336,8 +345,10 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
           margin={[gap, gap]}
           containerPadding={[0, 0]}
           autoSize={true}
+          style={pageHeight ? { minHeight: pageHeight } : undefined}
           dragConfig={{
             enabled: !readonly,
+            bounded: !!pageHeight,
             cancel: ".ProseMirror, input, textarea, [contenteditable=true], .grid-card-close, .grid-no-drag",
           }}
           resizeConfig={{ enabled: !readonly, handles: ["se", "sw", "ne", "nw"] }}

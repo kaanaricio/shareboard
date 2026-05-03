@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { __draftPolicyForTests, draftSignature } from "./local-draft";
+import { __draftPolicyForTests, draftLayoutSignature, draftSignature } from "./local-draft";
 import type { BoardPage } from "./types";
 
 describe("local draft policy", () => {
@@ -108,5 +108,6 @@ describe("local draft policy", () => {
     expect(draftSignature(base, null, { kind: "draft" })).toBe(
       draftSignature(moved, null, { kind: "draft" }),
     );
+    expect(draftLayoutSignature(base)).not.toBe(draftLayoutSignature(moved));
   });
 });

@@ -249,6 +249,30 @@ export function draftSignature(
   });
 }
 
+export function draftLayoutSignature(pages: BoardPage[]): string {
+  const clean = (items: GridLayouts["lg"] = []) =>
+    items.map(({ i, x, y, w, h, minW, maxW, minH, maxH }) => ({
+      i,
+      x,
+      y,
+      w,
+      h,
+      ...(minW != null && { minW }),
+      ...(maxW != null && { maxW }),
+      ...(minH != null && { minH }),
+      ...(maxH != null && { maxH }),
+    }));
+  return JSON.stringify({
+    p: pages.map((page) => ({
+      id: page.id,
+      l: {
+        lg: clean(page.layouts.lg),
+        sm: clean(page.layouts.sm),
+      },
+    })),
+  });
+}
+
 export const __draftPolicyForTests = {
   createStoredDraftSnapshot,
   restoreStoredDraftSnapshot,

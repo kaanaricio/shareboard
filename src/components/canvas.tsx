@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { X } from "lucide-react";
 import type { CanvasItem, GenerateResponse, GridLayouts } from "@/lib/types";
 import { UrlCard } from "./url-card";
@@ -90,6 +90,7 @@ export function Canvas({
   const lassoAdditiveRef = useRef(false);
   const lassoBaseSelectionRef = useRef<string[]>([]);
   const lassoDidDragRef = useRef(false);
+  const lassoResetTimerRef = useRef<number | null>(null);
   const modifiedMouseSelectRef = useRef(false);
 
   // Persisted aspect cache — tweets that have been seen in any board on this
@@ -198,6 +199,22 @@ export function Canvas({
     [onSelectMany],
   );
 
+  const clearLassoResetTimer = useCallback(() => {
+    if (lassoResetTimerRef.current == null) return;
+    window.clearTimeout(lassoResetTimerRef.current);
+    lassoResetTimerRef.current = null;
+  }, []);
+
+  const resetLassoDragFlagSoon = useCallback(() => {
+    clearLassoResetTimer();
+    lassoResetTimerRef.current = window.setTimeout(() => {
+      lassoDidDragRef.current = false;
+      lassoResetTimerRef.current = null;
+    }, 0);
+  }, [clearLassoResetTimer]);
+
+  useEffect(() => clearLassoResetTimer, [clearLassoResetTimer]);
+
   const handlePointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>) => {
       if (readonly || isMobile || e.button !== 0 || !onSelectMany) return;
@@ -206,6 +223,7 @@ export function Canvas({
         "[data-canvas-item-id], .react-grid-item, button, input, textarea, [contenteditable=true]",
       );
       if (interactive) return;
+      clearLassoResetTimer();
       const rect = e.currentTarget.getBoundingClientRect();
       const startX = e.clientX - rect.left;
       const startY = e.clientY - rect.top;
@@ -215,7 +233,7 @@ export function Canvas({
       setLasso({ startX, startY, x: startX, y: startY });
       e.currentTarget.setPointerCapture(e.pointerId);
     },
-    [isMobile, onSelectMany, readonly, selectedIds],
+    [clearLassoResetTimer, isMobile, onSelectMany, readonly, selectedIds],
   );
 
   const handlePointerMove = useCallback(
@@ -239,11 +257,13 @@ export function Canvas({
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
     setLasso(null);
-  }, [lasso]);
+    if (lassoDidDragRef.current) resetLassoDragFlagSoon();
+  }, [lasso, resetLassoDragFlagSoon]);
 
   const handleBackgroundClick = useCallback(
     (e: React.MouseEvent) => {
       if (lassoDidDragRef.current) {
+        clearLassoResetTimer();
         lassoDidDragRef.current = false;
         return;
       }
@@ -253,7 +273,7 @@ export function Canvas({
         target.classList.contains("react-grid-layout");
       if (isBackground && onSelect) onSelect(null);
     },
-    [onSelect]
+    [clearLassoResetTimer, onSelect]
   );
 
   const handleDragEnter = useCallback(

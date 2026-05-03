@@ -222,8 +222,8 @@ describe("mergeLayout", () => {
   test("normalizes persisted layouts back inside the grid and row budget", () => {
     const merged = mergeLayout(
       [
-        { i: "wide", x: -5, y: -2, w: 40, h: 6 },
-        { i: "low", x: 20, y: 99, w: 8, h: 12 },
+        { i: "wide", x: -5, y: -2, w: 40, h: 6, minW: 30 },
+        { i: "low", x: 20, y: 99, w: 8, h: 12, minH: 30 },
       ],
       [
         { id: "wide", preferredSpan: 8, preferredRows: 6 },
@@ -233,9 +233,11 @@ describe("mergeLayout", () => {
     );
 
     expect(merged.find((l) => l.i === "wide")).toMatchObject({ x: 0, y: 0, w: 24 });
+    expect(merged.find((l) => l.i === "wide")?.minW).toBe(24);
     const low = merged.find((l) => l.i === "low")!;
     expect(low.x + low.w).toBeLessThanOrEqual(OPTS.columns);
     expect(low.y + low.h).toBeLessThanOrEqual(18);
+    expect(low.minH).toBe(low.h);
   });
   test("repacks overlapping persisted layouts instead of preserving collisions", () => {
     const merged = mergeLayout(

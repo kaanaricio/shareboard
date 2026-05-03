@@ -34,6 +34,7 @@ import {
 import { getApiKey, isSetup, useSyncedSetting } from "@/lib/store";
 import {
   clearLocalDraft,
+  draftLayoutSignature,
   draftSignature,
   loadLocalDraft,
   saveLocalDraft,
@@ -164,6 +165,7 @@ export function Home() {
   const pendingActivePageRef = useRef<number | null>(null);
   const pendingSelectedIdsRef = useRef<string[] | null>(null);
   const lastSavedSigRef = useRef<string>("");
+  const lastSavedLayoutSigRef = useRef<string>("");
   const lockedDisposeRef = useRef<(() => void) | null>(null);
   const canvasClipboardRef = useRef<CanvasItem[]>([]);
   // Keep latest pages in a ref so the unmount blob-URL cleanup can walk them
@@ -323,6 +325,7 @@ export function Home() {
     () => draftSignature(pages, generation, boardOrigin),
     [pages, generation, boardOrigin],
   );
+  const currentDraftLayoutSig = useMemo(() => draftLayoutSignature(pages), [pages]);
 
   // Save current pages+generation+origin. Reads via refs so the callback identity is
   // stable across renders — important for the auto-save effect's deps.
@@ -331,10 +334,12 @@ export function Home() {
     const g = generationRef.current;
     const o = boardOriginRef.current;
     const sig = draftSignature(p, g, o);
+    const layoutSig = draftLayoutSignature(p);
     setSaveState("saving");
     try {
       await saveLocalDraft(p, g, o);
       lastSavedSigRef.current = sig;
+      lastSavedLayoutSigRef.current = layoutSig;
       setSaveState("saved");
       if (manual) notify.success("Saved to this browser");
     } catch (error) {
@@ -361,11 +366,14 @@ export function Home() {
     setShowSavedLabel(false);
   }, [saveState]);
 
-  // Auto-save with a short debounce. Skips when content matches what's already
-  // persisted (so reflowing layouts or re-rendering doesn't spam writes).
+  // Auto-save with a short debounce. Content and layout signatures are tracked
+  // separately so pure card moves persist without making rich editors noisy.
   useEffect(() => {
     if (!mounted) return;
-    if (currentDraftSig === lastSavedSigRef.current) {
+    if (
+      currentDraftSig === lastSavedSigRef.current &&
+      currentDraftLayoutSig === lastSavedLayoutSigRef.current
+    ) {
       setSaveState((prev) => (prev === "saved" ? prev : "saved"));
       return;
     }
@@ -374,7 +382,7 @@ export function Home() {
       void writeDraft(false);
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [mounted, currentDraftSig, writeDraft]);
+  }, [mounted, currentDraftSig, currentDraftLayoutSig, writeDraft]);
 
   // Mount-only: hydrate localStorage-backed flags + IDB draft, revoke blob URLs
   // on unmount. Mount paint is delayed until the draft load resolves so the
@@ -391,8 +399,10 @@ export function Home() {
           setGeneration(draft.generation);
           setBoardOrigin(draft.boardOrigin);
           lastSavedSigRef.current = draftSignature(draft.pages, draft.generation, draft.boardOrigin);
+          lastSavedLayoutSigRef.current = draftLayoutSignature(draft.pages);
         } else {
           lastSavedSigRef.current = draftSignature(pagesRef.current, null, { kind: "draft" });
+          lastSavedLayoutSigRef.current = draftLayoutSignature(pagesRef.current);
         }
       })
       .finally(() => {
