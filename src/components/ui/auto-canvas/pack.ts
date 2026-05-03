@@ -319,7 +319,7 @@ function placeFresh(
   const preferredSpan = chooseSpan(spec, options);
 
   if (spec.aspect && spec.aspect > 0 && maxRows && maxRows > 0) {
-    const minSpan = Math.max(1, Math.min(preferredSpan, spec.minSpan ?? 3));
+    const minSpan = 1;
     for (let w = preferredSpan; w >= minSpan; w--) {
       const h = chooseRows(spec, w, options);
       const { x, y } = lowestPlacement(skyline, w, columns);

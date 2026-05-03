@@ -17,6 +17,20 @@ function rectsOverlap(a: Pick<LayoutItem, "x" | "y" | "w" | "h">, b: Pick<Layout
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
+function toStoredLayout(layout: Layout): Layout {
+  return layout.map(({ i, x, y, w, h, minW, maxW, minH, maxH }) => ({
+    i,
+    x,
+    y,
+    w,
+    h,
+    ...(minW != null && { minW }),
+    ...(maxW != null && { maxW }),
+    ...(minH != null && { minH }),
+    ...(maxH != null && { maxH }),
+  }));
+}
+
 export interface AutoCanvasProps {
   /** Grid columns at the lg breakpoint (default 24). */
   columns?: number;
@@ -140,12 +154,8 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
     //   - Aspect-locked tiles keep their pxW/pxH ratio during resize.
     //   - gridBounds prevents horizontal overflow.
     //
-    // Note we intentionally do NOT cap maxH by (maxRows - y). Capping it
-    // means resize gets reverted as soon as it would push another tile
-    // off-screen — the "fridge" problem (user expects sibling tiles to
-    // rearrange to make room). With no cap, resize flows freely; the canvas
-    // scrolls vertically if content exceeds the viewport. maxRows is still
-    // honoured by the packer as a *soft* target for initial placement.
+    // maxRows is a hard page budget: packing, dragging, and resizing should
+    // not persist tiles below the visible canvas cutoff.
     // Re-derive height for aspect-locked tiles each render so width changes
     // (new cached aspect, container resize) reflow heights without persisting.
     // Flex tiles keep their persisted/packed h.
@@ -213,7 +223,8 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
       if (moved) {
         const others = next.filter((l) => l.i !== moved.i);
         const collides = others.some((o) => rectsOverlap(moved, o));
-        if (collides) {
+        const overflows = !!maxRows && maxRows > 0 && moved.y + moved.h > maxRows;
+        if (collides || overflows) {
           const prev = before.find((p) => p.i === moved.i);
           if (prev) {
             finalLayout = next.map((l) =>
@@ -228,9 +239,9 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
         lg: layout?.lg ?? [],
         sm: layout?.sm ?? [],
       };
-      onLayoutChange({ ...prevLayouts, [bp]: [...finalLayout] });
+      onLayoutChange({ ...prevLayouts, [bp]: toStoredLayout(finalLayout) });
     },
-    [onLayoutChange, readonly, layout],
+    [onLayoutChange, readonly, layout, maxRows],
   );
 
   const setContainerRef = useCallback(
@@ -255,6 +266,7 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
           breakpoints={{ lg: lgBreakpoint, sm: 0 }}
           cols={{ lg: columns, sm: smColumns }}
           rowHeight={rowHeight}
+          maxRows={maxRows}
           margin={[gap, gap]}
           containerPadding={[0, 0]}
           autoSize={true}

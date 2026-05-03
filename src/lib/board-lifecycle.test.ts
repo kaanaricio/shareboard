@@ -285,6 +285,57 @@ describe("board lifecycle", () => {
     expect(result.pages[1]?.items.map((item) => item.id)).toEqual(["b"]);
   });
 
+  test("continues past existing full pages instead of overfilling the next page", () => {
+    const fullPage = (id: string, itemId: string): BoardPage => ({
+      id,
+      items: [{ id: itemId, type: "note", text: "x" }],
+      layouts: { lg: [{ i: itemId, x: 0, y: 0, w: 24, h: 4 }], sm: [] },
+    });
+
+    const result = addItemWithSpillToPages({
+      pages: [fullPage("p1", "a"), fullPage("p2", "b")],
+      activePage: 0,
+      item: { id: "c", type: "note", text: "new" },
+      maxRows: 3,
+    });
+
+    expect(result.landedIndex).toBe(2);
+    expect(result.pages).toHaveLength(3);
+    expect(result.pages[0]?.items.map((item) => item.id)).toEqual(["a"]);
+    expect(result.pages[1]?.items.map((item) => item.id)).toEqual(["b"]);
+    expect(result.pages[2]?.items.map((item) => item.id)).toEqual(["c"]);
+  });
+
+  test("bulk image placement keeps every populated page within the row budget", () => {
+    const file = new File(["x"], "avatar.webp", { type: "image/webp" });
+    let pages = [emptyBoardPage()];
+    let pageIndex = 0;
+
+    for (let index = 0; index < 24; index++) {
+      const result = addItemWithSpillToPages({
+        pages,
+        activePage: pageIndex,
+        item: {
+          id: `img-${index}`,
+          type: "image",
+          file,
+          previewUrl: `blob:${index}`,
+          aspect: 1,
+          size: file.size,
+        },
+        maxRows: 21,
+      });
+      pages = result.pages;
+      pageIndex = result.landedIndex;
+    }
+
+    expect(pages.flatMap((page) => page.items)).toHaveLength(24);
+    for (const page of pages) {
+      const bottom = page.layouts.lg.reduce((max, layout) => Math.max(max, layout.y + layout.h), 0);
+      expect(bottom).toBeLessThanOrEqual(21);
+    }
+  });
+
   test("creates empty editable pages with required layout containers", () => {
     const page = emptyBoardPage();
     expect(page.items).toEqual([]);

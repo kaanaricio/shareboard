@@ -120,6 +120,22 @@ function stripForStorage(items: CanvasItem[]): unknown[] {
   });
 }
 
+function stripLayoutsForStorage(layouts: GridLayouts): GridLayouts {
+  const clean = (items: GridLayouts["lg"] = []) =>
+    items.map(({ i, x, y, w, h, minW, maxW, minH, maxH }) => ({
+      i,
+      x,
+      y,
+      w,
+      h,
+      ...(minW != null && { minW }),
+      ...(maxW != null && { maxW }),
+      ...(minH != null && { minH }),
+      ...(maxH != null && { maxH }),
+    }));
+  return { lg: clean(layouts.lg), sm: clean(layouts.sm) };
+}
+
 function rehydrate(items: unknown[], adapter: DraftSerializationAdapter): CanvasItem[] {
   const out: CanvasItem[] = [];
   for (const raw of items) {
@@ -144,6 +160,7 @@ function createStoredDraftSnapshot(
     generation,
     pages: pages.map((page) => ({
       ...page,
+      layouts: stripLayoutsForStorage(page.layouts),
       items: stripForStorage(page.items),
     })),
     boardOrigin,
@@ -235,6 +252,7 @@ export function draftSignature(
 export const __draftPolicyForTests = {
   createStoredDraftSnapshot,
   restoreStoredDraftSnapshot,
+  stripLayoutsForStorage,
   stripForStorage,
   rehydrate,
 };

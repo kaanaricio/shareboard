@@ -57,6 +57,38 @@ describe("local draft policy", () => {
     expect(restored?.pages[0]?.items[0]).toMatchObject({ type: "image", previewUrl: "blob:new" });
   });
 
+  test("strips runtime layout fields before persistence", () => {
+    const pages: BoardPage[] = [
+      {
+        id: "p1",
+        items: [{ id: "note", type: "note", text: "hello" }],
+        layouts: {
+          lg: [
+            {
+              i: "note",
+              x: 1,
+              y: 2,
+              w: 3,
+              h: 4,
+              minW: 2,
+              constrainPosition() {
+                return { x: 0, y: 0 };
+              },
+            } as never,
+          ],
+          sm: [],
+        },
+      },
+    ];
+
+    const storedLayout = __draftPolicyForTests.createStoredDraftSnapshot(pages, null).pages[0]?.layouts.lg[0] as
+      | Record<string, unknown>
+      | undefined;
+
+    expect(storedLayout).toEqual({ i: "note", x: 1, y: 2, w: 3, h: 4, minW: 2 });
+    expect(storedLayout?.constrainPosition).toBeUndefined();
+  });
+
   test("draft signature stays stable across layout-only changes", () => {
     const base: BoardPage[] = [
       {

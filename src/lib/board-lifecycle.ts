@@ -226,20 +226,21 @@ export function addItemWithSpillToPages({
   maxRows: number;
 }): { pages: BoardPage[]; landedIndex: number } {
   const next = [...pages];
-  const active = next[activePage] ?? emptyBoardPage();
-  const tentativeItems = [...active.items, item];
-  const tentative = packPageLayouts(tentativeItems, active.layouts, maxRows);
-  const tentativeBottom = tentative.lg.reduce((max, layout) => Math.max(max, layout.y + layout.h), 0);
-  const fits = tentativeBottom <= maxRows;
+  const start = Math.max(0, activePage);
 
-  if (fits || active.items.length === 0) {
-    next[activePage] = { ...active, items: tentativeItems, layouts: tentative };
-    return { pages: next, landedIndex: activePage };
+  for (let index = start; index < next.length; index++) {
+    const target = next[index] ?? emptyBoardPage();
+    const items = [...target.items, item];
+    const layouts = packPageLayouts(items, target.layouts, maxRows);
+    const bottom = layouts.lg.reduce((max, layout) => Math.max(max, layout.y + layout.h), 0);
+    if (bottom <= maxRows) {
+      next[index] = { ...target, items, layouts };
+      return { pages: next, landedIndex: index };
+    }
   }
 
-  const landedIndex = activePage + 1;
-  if (landedIndex >= next.length) next.push(emptyBoardPage());
-  const target = next[landedIndex]!;
+  const landedIndex = next.length;
+  const target = emptyBoardPage();
   const items = [...target.items, item];
   next[landedIndex] = {
     ...target,

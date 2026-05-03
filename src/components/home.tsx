@@ -106,6 +106,19 @@ function mediaBytesForPages(pages: readonly BoardPage[]) {
   );
 }
 
+async function fileFingerprint(file: File) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle) {
+    const digest = new Uint8Array(await subtle.digest("SHA-256", bytes));
+    return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  let hash = 2166136261;
+  for (const byte of bytes) hash = Math.imul(hash ^ byte, 16777619);
+  return `${file.type}:${file.size}:${hash >>> 0}`;
+}
+
 type SelectionEvent = { metaKey?: boolean; ctrlKey?: boolean };
 
 export function Home() {
@@ -480,9 +493,18 @@ export function Home() {
       if (imageFiles.length === 0) return false;
 
       const optimizedImages = [];
+      const seen = new Set<string>();
+      let duplicateCount = 0;
       for (const file of imageFiles) {
         try {
-          optimizedImages.push(await optimizeImageForShare(file));
+          const optimized = await optimizeImageForShare(file);
+          const fingerprint = await fileFingerprint(optimized.file);
+          if (seen.has(fingerprint)) {
+            duplicateCount += 1;
+            continue;
+          }
+          seen.add(fingerprint);
+          optimizedImages.push(optimized);
         } catch (error) {
           notify.error(error instanceof Error ? error.message : "Could not add image");
         }
@@ -530,7 +552,13 @@ export function Home() {
       if (lastLandedIndex !== activePage) {
         queueMicrotask(() => navigate({ search: { page: lastLandedIndex + 1 }, replace: false }));
       }
-      notify.success(items.length === 1 ? "Image added" : `${items.length} images added`);
+      notify.success(
+        duplicateCount > 0
+          ? `${items.length} unique ${items.length === 1 ? "image" : "images"} added, ${duplicateCount} duplicate ${duplicateCount === 1 ? "entry" : "entries"} skipped`
+          : items.length === 1
+            ? "Image added"
+            : `${items.length} images added`,
+      );
       return true;
     },
     [activePage, maxRows, navigate],
@@ -756,16 +784,6 @@ export function Home() {
     const clipboard = e.clipboardData;
     if (!clipboard) return;
 
-    const imageFilesFromItems = Array.from(clipboard.items)
-      .filter((item) => item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => !!file);
-    if (imageFilesFromItems.length > 0) {
-      e.preventDefault();
-      void addImages(imageFilesFromItems);
-      return;
-    }
-
     if (clipboard.files.length > 0) {
       e.preventDefault();
       const imageFiles = Array.from(clipboard.files).filter((file) => file.type.startsWith("image/"));
@@ -774,6 +792,16 @@ export function Home() {
       } else {
         notify.error("Only images can be pasted into a board");
       }
+      return;
+    }
+
+    const imageFilesFromItems = Array.from(clipboard.items)
+      .filter((item) => item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+    if (imageFilesFromItems.length > 0) {
+      e.preventDefault();
+      void addImages(imageFilesFromItems);
       return;
     }
 
