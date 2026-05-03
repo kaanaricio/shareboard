@@ -12,23 +12,26 @@ const OVERDRAG_RESIST = 0.35;
 export function BoardCarousel<T>({
   pages,
   activeIndex,
+  getPageKey,
   renderPage,
   onNavigate,
 }: {
   pages: T[];
   activeIndex: number;
+  getPageKey?: (page: T, index: number) => string;
   renderPage: (page: T, index: number, isActive: boolean) => ReactNode;
   onNavigate?: (delta: -1 | 1) => void;
 }) {
-  const safeIndex = Math.max(0, Math.min(activeIndex, pages.length - 1));
+  const pageCount = pages.length;
+  const safeIndex = pageCount === 0 ? 0 : Math.max(0, Math.min(activeIndex, pageCount - 1));
   const viewportRef = useRef<HTMLDivElement>(null);
   const [dragDx, setDragDx] = useState<number | null>(null);
 
   // Latest-state ref: touch handlers attach once on mount, route to the
   // current closure so pages.length / safeIndex changes don't require
   // resubscribing (and we stay within the useMountEffect-only rule).
-  const latest = useRef({ safeIndex, pageCount: pages.length, onNavigate, dragDx });
-  latest.current = { safeIndex, pageCount: pages.length, onNavigate, dragDx };
+  const latest = useRef({ safeIndex, pageCount, onNavigate, dragDx });
+  latest.current = { safeIndex, pageCount, onNavigate, dragDx };
 
   useMountEffect(() => {
     const el = viewportRef.current;
@@ -97,7 +100,7 @@ export function BoardCarousel<T>({
 
   // Base percent offset is unchanged; dragDx is an additive px nudge during a
   // live swipe. Example: on page 2 of 3 with 40px right-drag → calc(-33.3% + 40px).
-  const basePct = (safeIndex * 100) / pages.length;
+  const basePct = pageCount === 0 ? 0 : (safeIndex * 100) / pageCount;
   const dragging = dragDx !== null;
 
   return (
@@ -105,7 +108,7 @@ export function BoardCarousel<T>({
       <div
         className="board-carousel-track"
         style={{
-          width: `${pages.length * 100}%`,
+          width: `${Math.max(1, pageCount) * 100}%`,
           transform: dragging
             ? `translate3d(calc(-${basePct}% + ${dragDx}px), 0, 0)`
             : `translate3d(-${basePct}%, 0, 0)`,
@@ -114,9 +117,9 @@ export function BoardCarousel<T>({
       >
         {pages.map((page, i) => (
           <div
-            key={i}
+            key={getPageKey?.(page, i) ?? i}
             className="board-carousel-slide"
-            style={{ width: `${100 / pages.length}%` }}
+            style={{ width: `${100 / Math.max(1, pageCount)}%` }}
             aria-hidden={i !== safeIndex || undefined}
           >
             {renderPage(page, i, i === safeIndex)}

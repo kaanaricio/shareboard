@@ -292,6 +292,25 @@ describe("resolveDisplacedLayout", () => {
     expect(resolved?.find((item) => item.i === "b")).toMatchObject({ x: 0, y: 0 });
   });
 
+  test("inserts through a same-size row instead of directly swapping endpoints", () => {
+    const before = [
+      { i: "a", x: 0, y: 0, w: 8, h: 6 },
+      { i: "b", x: 8, y: 0, w: 8, h: 6 },
+      { i: "c", x: 16, y: 0, w: 8, h: 6 },
+    ];
+    const next = [
+      { i: "a", x: 16, y: 0, w: 8, h: 6 },
+      { i: "b", x: 8, y: 0, w: 8, h: 6 },
+      { i: "c", x: 16, y: 0, w: 8, h: 6 },
+    ];
+
+    const resolved = resolveDisplacedLayout(next, before, "a", { columns: 24, maxRows: 6 });
+
+    expect(resolved?.find((item) => item.i === "a")).toMatchObject({ x: 16, y: 0 });
+    expect(resolved?.find((item) => item.i === "b")).toMatchObject({ x: 0, y: 0 });
+    expect(resolved?.find((item) => item.i === "c")).toMatchObject({ x: 8, y: 0 });
+  });
+
   test("pushes a partially overlapped card in the drag direction when space exists", () => {
     const before = [
       { i: "a", x: 0, y: 0, w: 8, h: 6 },

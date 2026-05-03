@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useMemo, useRef, type ReactNode } from "react";
+import { forwardRef, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Responsive, useContainerWidth, noCompactor } from "react-grid-layout";
 import type { Layout, LayoutItem, ResponsiveLayouts } from "react-grid-layout";
 import { aspectRatio, gridBounds, snapToGrid } from "react-grid-layout/core";
@@ -186,6 +186,13 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
     };
   }, [tileSpecs, layout, width, columns, smColumns, rowHeight, gap, maxRows]);
 
+  const [dragPreview, setDragPreview] = useState<ResponsiveLayouts | null>(null);
+  const dragPreviewRef = useRef<ResponsiveLayouts | null>(null);
+  const setDragPreviewLayouts = useCallback((next: ResponsiveLayouts | null) => {
+    dragPreviewRef.current = next;
+    setDragPreview(next);
+  }, []);
+
   // Snapshot of the pre-drag layout so we can revert an overlapping drop.
   // Example: [{ i:"a", x:0, y:0, w:6, h:6 }, { i:"b", x:6, y:0, w:6, h:6 }]
   const preInteractionRef = useRef<Layout | null>(null);
@@ -195,19 +202,67 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
     (current: Layout, kind: "drag" | "resize") => {
       preInteractionRef.current = current.map((l) => ({ ...l }));
       interactionKindRef.current = kind;
+      setDragPreviewLayouts(null);
       document.body.classList.add("grid-interacting");
       // Resize-specific class so the placeholder can render as the *primary*
       // snap-target signal (above the live tile, stronger contrast). During
       // drag we keep the quieter ghost — the user's eye follows the card.
       if (kind === "resize") document.body.classList.add("grid-resizing");
     },
-    [],
+    [setDragPreviewLayouts],
+  );
+
+  const handleDrag = useCallback(
+    (next: Layout, activeItem?: LayoutItem | null) => {
+      if (!onLayoutChange || readonly) return;
+
+      const before = preInteractionRef.current ?? [];
+      if (before.length === 0) return;
+
+      const changed = activeItem ?? next.find((l) => {
+        const p = before.find((pp) => pp.i === l.i);
+        return p && (p.x !== l.x || p.y !== l.y || p.w !== l.w || p.h !== l.h);
+      });
+      if (!changed) {
+        setDragPreviewLayouts(null);
+        return;
+      }
+
+      const normalizedNext = next.map((item) => {
+        if (item.i === changed.i) return { ...item };
+        const original = before.find((candidate) => candidate.i === item.i);
+        return original ? { ...item, x: original.x, y: original.y, w: original.w, h: original.h } : { ...item };
+      });
+      const moved = normalizedNext.find((item) => item.i === changed.i);
+      if (!moved) return;
+
+      const others = normalizedNext.filter((item) => item.i !== moved.i);
+      const collides = others.some((item) => rectsOverlap(moved, item));
+      const overflows = !!maxRows && maxRows > 0 && moved.y + moved.h > maxRows;
+      if (!collides || overflows) {
+        setDragPreviewLayouts(null);
+        return;
+      }
+
+      const resolved = resolveDisplacedLayout(normalizedNext, before, moved.i, { columns, maxRows });
+      if (!resolved) {
+        setDragPreviewLayouts(null);
+        return;
+      }
+
+      const bp = breakpointRef.current;
+      setDragPreviewLayouts({ ...merged, [bp]: resolved });
+    },
+    [onLayoutChange, readonly, maxRows, columns, merged, setDragPreviewLayouts],
   );
 
   const handleInteractionStop = useCallback(
     (next: Layout) => {
       document.body.classList.remove("grid-interacting");
       document.body.classList.remove("grid-resizing");
+      const bp = breakpointRef.current;
+      const preview = dragPreviewRef.current?.[bp] ?? null;
+      setDragPreviewLayouts(null);
       if (!onLayoutChange || readonly) return;
 
       const before = preInteractionRef.current ?? [];
@@ -223,8 +278,8 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
         return p && (p.x !== l.x || p.y !== l.y || p.w !== l.w || p.h !== l.h);
       });
 
-      let finalLayout = next;
-      if (moved) {
+      let finalLayout = kind === "drag" && preview ? preview : next;
+      if (!preview && moved) {
         const others = next.filter((l) => l.i !== moved.i);
         const collides = others.some((o) => rectsOverlap(moved, o));
         const overflows = !!maxRows && maxRows > 0 && moved.y + moved.h > maxRows;
@@ -246,14 +301,13 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
         }
       }
 
-      const bp = breakpointRef.current;
       const prevLayouts: AutoLayouts = {
         lg: layout?.lg ?? [],
         sm: layout?.sm ?? [],
       };
       onLayoutChange({ ...prevLayouts, [bp]: toStoredLayout(finalLayout) });
     },
-    [onLayoutChange, readonly, layout, maxRows, columns],
+    [onLayoutChange, readonly, layout, maxRows, columns, setDragPreviewLayouts],
   );
 
   const setContainerRef = useCallback(
@@ -274,7 +328,7 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
       {width > 0 && (
         <Responsive
           width={width}
-          layouts={merged}
+          layouts={dragPreview ?? merged}
           breakpoints={{ lg: lgBreakpoint, sm: 0 }}
           cols={{ lg: columns, sm: smColumns }}
           rowHeight={rowHeight}
@@ -292,6 +346,7 @@ export const AutoCanvas = forwardRef<HTMLDivElement, AutoCanvasProps>(function A
             breakpointRef.current = bp === "sm" ? "sm" : "lg";
           }}
           onDragStart={(l: Layout) => handleInteractionStart(l, "drag")}
+          onDrag={(l: Layout, _oldItem: LayoutItem | null, newItem: LayoutItem | null) => handleDrag(l, newItem)}
           onDragStop={(l: Layout) => handleInteractionStop(l)}
           onResizeStart={(l: Layout) => handleInteractionStart(l, "resize")}
           onResizeStop={(l: Layout) => handleInteractionStop(l)}

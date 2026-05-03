@@ -329,6 +329,9 @@ export function resolveDisplacedLayout(
   const prevMoved = before.find((item) => item.i === movedId);
   if (!moved || !prevMoved || !fitsBounds(moved, options)) return null;
 
+  const inserted = resolveInsertedLayout(next, before, moved, options);
+  if (inserted) return inserted;
+
   const result = next.map((item) => ({ ...item }));
   const queue = result
     .filter((item) => item.i !== movedId && rectsOverlap(item, moved))
@@ -348,6 +351,50 @@ export function resolveDisplacedLayout(
     if (!position) return null;
     item.x = position.x;
     item.y = position.y;
+  }
+
+  return layoutIsValid(result, options) ? result : null;
+}
+
+function resolveInsertedLayout(
+  next: LayoutItem[],
+  before: LayoutItem[],
+  moved: LayoutItem,
+  options: ResolveDisplacementOptions,
+): LayoutItem[] | null {
+  const target = before
+    .filter((item) => item.i !== moved.i && rectsOverlap(item, moved))
+    .map((item) => ({
+      item,
+      ratio: overlapArea(item, moved) / Math.max(1, Math.min(item.w * item.h, moved.w * moved.h)),
+    }))
+    .sort((a, b) => b.ratio - a.ratio)[0];
+  if (!target || target.ratio < 0.55) return null;
+
+  const nextIds = new Set(next.map((item) => item.i));
+  const beforeOrdered = before
+    .filter((item) => nextIds.has(item.i))
+    .sort((a, b) => (a.y - b.y) || (a.x - b.x));
+  const fromIndex = beforeOrdered.findIndex((item) => item.i === moved.i);
+  const toIndex = beforeOrdered.findIndex((item) => item.i === target.item.i);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return null;
+
+  const start = Math.min(fromIndex, toIndex);
+  const end = Math.max(fromIndex, toIndex);
+  const path = beforeOrdered.slice(start, end + 1);
+  if (path.some((item) => item.w !== moved.w || item.h !== moved.h)) return null;
+
+  const orderedIds = beforeOrdered.map((item) => item.i);
+  orderedIds.splice(fromIndex, 1);
+  orderedIds.splice(toIndex, 0, moved.i);
+
+  const result = next.map((item) => ({ ...item }));
+  for (let index = 0; index < beforeOrdered.length; index++) {
+    const item = result.find((entry) => entry.i === orderedIds[index]);
+    const slot = beforeOrdered[index];
+    if (!item || !slot) return null;
+    item.x = slot.x;
+    item.y = slot.y;
   }
 
   return layoutIsValid(result, options) ? result : null;

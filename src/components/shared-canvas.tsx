@@ -142,6 +142,7 @@ export function SharedCanvas({
       <BoardCarousel
         pages={pages}
         activeIndex={activePage}
+        getPageKey={(page) => page.id}
         onNavigate={(delta) => setActivePage(activePage + delta)}
         renderPage={(page, _i, isActive) => (
           <Canvas

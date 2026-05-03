@@ -432,9 +432,9 @@ export function Home() {
 
   /**
    * Add `item` to the active page, or spill to the next page (auto-creating it)
-   * if the active page can't fit the new tile inside maxRows. Returns the page
-   * index the item actually landed on. Empty pages always accept even oversize
-   * tiles — otherwise a single tall tweet would spill forever.
+   * if the active page can't fit the new tile inside maxRows. Empty pages clamp
+   * a single oversize tile to the page budget instead of creating unreachable
+   * overflow.
    *
    * All state reads happen inside the setPages updater so rapid pastes (user
    * holding Cmd+V) see each other's work — otherwise they'd all compute
@@ -442,17 +442,12 @@ export function Home() {
    * earlier items.
    */
   const addItemWithSpill = useCallback(
-    (item: CanvasItem): number => {
-      // Written by the setPages updater below. Read AFTER setPages returns —
-      // React schedules the updater synchronously for this event handler.
-      let landedIndex = activePage;
+    (item: CanvasItem) => {
       setPages((prev) => {
         const result = addItemWithSpillToPages({ pages: prev, activePage, item, maxRows });
-        landedIndex = result.landedIndex;
         if (result.landedIndex !== activePage) pendingActivePageRef.current = result.landedIndex;
         return result.pages;
       });
-      return landedIndex;
     },
     [activePage, maxRows]
   );
@@ -467,7 +462,7 @@ export function Home() {
       const id = nanoid(10);
       const item: CanvasItem = { id, type: "url", url: rawUrl, platform };
 
-      const landedIndex = addItemWithSpill(item);
+      addItemWithSpill(item);
 
       // YouTube/Twitter render via dedicated embeds, so OG metadata is unused.
       // Other sites that block CF Workers (e.g. LinkedIn) gracefully fall back
@@ -478,18 +473,24 @@ export function Home() {
         const res = await fetch(`/api/og?url=${encodeURIComponent(rawUrl)}`);
         if (res.ok) {
           const ogData = (await res.json()) as OGData;
-          patchPage(landedIndex, (page) => ({
-            ...page,
-            items: page.items.map((i) =>
-              i.id === id && i.type === "url" ? { ...i, ogData } : i
-            ),
-          }));
+          setPages((prev) =>
+            prev.map((page) =>
+              page.items.some((i) => i.id === id)
+                ? {
+                    ...page,
+                    items: page.items.map((i) =>
+                      i.id === id && i.type === "url" ? { ...i, ogData } : i
+                    ),
+                  }
+                : page,
+            )
+          );
         }
       } catch {
         // OG fetch is best-effort; swallow errors so the item still renders.
       }
     },
-    [addItemWithSpill, patchPage]
+    [addItemWithSpill]
   );
 
   const addImage = useCallback(
@@ -570,12 +571,11 @@ export function Home() {
 
       if (items.length === 0) return false;
 
-      let lastLandedIndex = activePage;
-      let selectedOnLandingPage: string[] = [];
-      const idsByPage = new Map<number, string[]>();
       setPages((prev) => {
         let nextPages = prev;
         let landingPage = activePage;
+        let lastLandedIndex = activePage;
+        const idsByPage = new Map<number, string[]>();
         for (const item of items) {
           const result = addItemWithSpillToPages({
             pages: nextPages,
@@ -588,14 +588,10 @@ export function Home() {
           lastLandedIndex = result.landedIndex;
           idsByPage.set(result.landedIndex, [...(idsByPage.get(result.landedIndex) ?? []), item.id]);
         }
-        selectedOnLandingPage = idsByPage.get(lastLandedIndex) ?? [];
-        pendingSelectedIdsRef.current = selectedOnLandingPage;
+        pendingSelectedIdsRef.current = idsByPage.get(lastLandedIndex) ?? [];
         if (lastLandedIndex !== activePage) pendingActivePageRef.current = lastLandedIndex;
         return nextPages;
       });
-      if (lastLandedIndex === activePage && selectedOnLandingPage.length > 0) {
-        setSelectedIds(selectedOnLandingPage);
-      }
       notify.success(
         duplicateCount > 0
           ? `${items.length} unique ${items.length === 1 ? "image" : "images"} added, ${duplicateCount} duplicate ${duplicateCount === 1 ? "entry" : "entries"} skipped`
@@ -667,8 +663,6 @@ export function Home() {
         notify.error(`Boards can hold up to ${formatBytes(IMAGE_POLICY.maxBoardBytes)} of images`);
         return;
       }
-      let landedIndex = pageIndex;
-      let newId: string | null = null;
       setPages((prev) => {
         const result = duplicateItemWithSpillToPages({
           pages: prev,
@@ -677,13 +671,10 @@ export function Home() {
           maxRows,
         });
         if (!result) return prev;
-        landedIndex = result.landedIndex;
-        newId = result.newId;
         pendingSelectedIdsRef.current = [result.newId];
         if (result.landedIndex !== pageIndex) pendingActivePageRef.current = result.landedIndex;
         return result.pages;
       });
-      if (newId && landedIndex === pageIndex) setSelectedIds([newId]);
     },
     [maxRows]
   );
@@ -698,12 +689,11 @@ export function Home() {
         return false;
       }
 
-      let lastLandedIndex = activePage;
-      let nextSelectedIds: string[] = [];
-      const idsByPage = new Map<number, string[]>();
       setPages((prev) => {
         let nextPages = prev;
         let landingPage = activePage;
+        let lastLandedIndex = activePage;
+        const idsByPage = new Map<number, string[]>();
         for (const item of copies) {
           const result = addItemWithSpillToPages({
             pages: nextPages,
@@ -716,14 +706,10 @@ export function Home() {
           lastLandedIndex = result.landedIndex;
           idsByPage.set(result.landedIndex, [...(idsByPage.get(result.landedIndex) ?? []), item.id]);
         }
-        nextSelectedIds = idsByPage.get(lastLandedIndex) ?? [];
-        pendingSelectedIdsRef.current = nextSelectedIds;
+        pendingSelectedIdsRef.current = idsByPage.get(lastLandedIndex) ?? [];
         if (lastLandedIndex !== activePage) pendingActivePageRef.current = lastLandedIndex;
         return nextPages;
       });
-      if (lastLandedIndex === activePage && nextSelectedIds.length > 0) {
-        setSelectedIds(nextSelectedIds);
-      }
       return true;
     },
     [activePage, maxRows],
@@ -1108,6 +1094,7 @@ export function Home() {
       <BoardCarousel
         pages={pages}
         activeIndex={activePage}
+        getPageKey={(page) => page.id}
         onNavigate={(delta) => setActivePage(activePage + delta)}
         renderPage={(page, i, isActive) => (
           <Canvas
