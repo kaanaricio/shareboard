@@ -90,6 +90,7 @@ export function Canvas({
   const lassoAdditiveRef = useRef(false);
   const lassoBaseSelectionRef = useRef<string[]>([]);
   const lassoDidDragRef = useRef(false);
+  const modifiedMouseSelectRef = useRef(false);
 
   // Persisted aspect cache — tweets that have been seen in any board on this
   // device place correctly on first paint on the next visit.
@@ -481,6 +482,7 @@ export function Canvas({
                 className={`group overflow-hidden rounded-lg ${selectedIds?.includes(item.id) ? "ring-2 ring-primary/40 ring-offset-2 ring-offset-background" : ""} ${readonly && item.type === "image" ? "cursor-zoom-in" : ""}`}
                 onMouseDownCapture={(e) => {
                   if (!readonly && (e.metaKey || e.ctrlKey)) {
+                    modifiedMouseSelectRef.current = true;
                     blurActiveElementSoon();
                     e.preventDefault();
                     e.stopPropagation();
@@ -489,6 +491,11 @@ export function Canvas({
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (modifiedMouseSelectRef.current) {
+                    modifiedMouseSelectRef.current = false;
+                    e.preventDefault();
+                    return;
+                  }
                   if (readonly && item.type === "image") {
                     const src = "url" in item ? item.url : item.previewUrl;
                     if (src) setLightbox({ src, alt: item.caption });
