@@ -691,12 +691,13 @@ export function Home() {
     const clipboard = e.clipboardData;
     if (!clipboard) return;
 
-    const imageItem = Array.from(clipboard.items).find((item) => item.type.startsWith("image/"));
-    if (imageItem) {
+    const imageFilesFromItems = Array.from(clipboard.items)
+      .filter((item) => item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => !!file);
+    if (imageFilesFromItems.length > 0) {
       e.preventDefault();
-      const file = imageItem.getAsFile();
-      if (!file) return;
-      void addImage(file);
+      void Promise.all(imageFilesFromItems.map((file) => addImage(file)));
       return;
     }
 
